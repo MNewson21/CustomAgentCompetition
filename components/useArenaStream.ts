@@ -31,7 +31,8 @@ export interface ArenaStream {
   panels: PanelState[];
   running: boolean;
   hasRun: boolean;
-  start: () => void;
+  /** real=true hits the sandboxed orchestrator (?real=1); false replays the simulation */
+  start: (real?: boolean) => void;
 }
 
 function appendLine(log: LogItem[], cls: LogLineClass, text: string): LogItem[] {
@@ -88,15 +89,18 @@ export function useArenaStream(): ArenaStream {
   const [hasRun, setHasRun] = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
-  const start = useCallback(() => {
+  const start = useCallback((real = false) => {
     esRef.current?.close();
     setPanels([]);
     setTask(null);
     setRunning(true);
     setHasRun(true);
 
-    // cache-bust so Replay always reconnects to a fresh round
-    const es = new EventSource(`/api/run/stream?t=${Date.now()}`);
+    // cache-bust so Replay always reconnects to a fresh round; ?real=1 selects the
+    // sandboxed orchestrator over the simulated replay (identical event contract).
+    const params = new URLSearchParams({ t: String(Date.now()) });
+    if (real) params.set("real", "1");
+    const es = new EventSource(`/api/run/stream?${params}`);
     esRef.current = es;
 
     es.onmessage = (e) => {

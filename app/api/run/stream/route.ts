@@ -1,5 +1,8 @@
 import { CONTENDERS, TASK, type ContenderDef, type ScriptStep } from "@/lib/contenders";
 import type { StreamEvent } from "@/lib/events";
+import { reverseContenders } from "@/lib/agent/brain";
+import { REVERSE_LINKED_LIST } from "@/lib/agent/tasks";
+import { runContender } from "@/lib/agent/runLoop";
 
 // SSE endpoint. Fans out all contenders on independent timelines and multiplexes
 // their events into one stream, exactly as the real orchestrator will. The browser
@@ -33,6 +36,10 @@ function stepText(s: ScriptStep): string {
 export async function GET(req: Request) {
   const encoder = new TextEncoder();
   let seq = 0;
+
+  // ?real=1 swaps the simulated replay for the real sandboxed orchestrator
+  // (build-order step 1). The client contract is byte-for-byte identical.
+  const real = new URL(req.url).searchParams.get("real") === "1";
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -124,6 +131,46 @@ export async function GET(req: Request) {
         });
       };
 
+      // REAL MODE: run the sandboxed orchestrator. Same multiplexed stream, but
+      // every event comes from an actual agent run whose code executed in a
+      // locked-down Docker container. `send` already assigns seq, so runContender's
+      // emit plugs straight in.
+      if (real) {
+        void (async () => {
+          const roster = reverseContenders(); // fresh, single-use brains per round
+          send({
+            type: "init",
+            task: {
+              title: REVERSE_LINKED_LIST.title,
+              type: REVERSE_LINKED_LIST.type,
+              prompt: REVERSE_LINKED_LIST.prompt,
+            },
+            contenders: roster.map((c) => c.meta),
+          });
+          await Promise.all(
+            roster.map((c) =>
+              runContender({
+                contenderId: c.meta.id,
+                brain: c.brain,
+                task: REVERSE_LINKED_LIST,
+                emit: send,
+              }),
+            ),
+          );
+          send({ type: "done" });
+          if (!closed) {
+            closed = true;
+            try {
+              controller.close();
+            } catch {
+              /* already closed */
+            }
+          }
+        })();
+        return;
+      }
+
+      // SIMULATED MODE (default):
       // 1) roster + task up front so panels render immediately as "queued"
       send({
         type: "init",

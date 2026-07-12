@@ -23,6 +23,8 @@ export function Arena() {
   const { task, panels, running, hasRun, start } = useArenaStream();
   const [now, setNow] = useState(() => Date.now());
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  // false = simulated replay; true = real sandboxed orchestrator (?real=1)
+  const [realMode, setRealMode] = useState(false);
 
   // wall-clock tick drives the per-panel live timers while a round is running
   useEffect(() => {
@@ -53,10 +55,22 @@ export function Arena() {
           <button className="toggle" onClick={toggleTheme}>
             {theme === "dark" ? "◐ Light" : "◐ Dark"}
           </button>
-          <button className="btn btn-secondary" onClick={start} disabled={running}>
+          <button
+            className="toggle"
+            onClick={() => setRealMode((r) => !r)}
+            disabled={running}
+            title={
+              realMode
+                ? "Running agents in real sandboxed Docker containers"
+                : "Replaying simulated round data"
+            }
+          >
+            {realMode ? "● Real sandbox" : "○ Simulated"}
+          </button>
+          <button className="btn btn-secondary" onClick={() => start(realMode)} disabled={running}>
             ↻ Replay
           </button>
-          <button className="btn btn-primary" onClick={start} disabled={running}>
+          <button className="btn btn-primary" onClick={() => start(realMode)} disabled={running}>
             ▶ Run round
           </button>
         </div>

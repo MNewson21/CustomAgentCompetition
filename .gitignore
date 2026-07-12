@@ -5,6 +5,7 @@
 *.key
 
 node_modules/
+.arena-sandbox/
 .next/
 out/
 dist/
