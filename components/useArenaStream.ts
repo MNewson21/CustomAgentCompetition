@@ -26,13 +26,24 @@ export interface PanelState {
   result: { pass: boolean; summary: string } | null;
 }
 
+/**
+ * How to source the round. All three produce the identical event stream, so
+ * nothing downstream of this hook knows which one ran.
+ *   {}                  → simulated replay
+ *   { real: true }      → sandboxed orchestrator, deterministic StubBrain
+ *   { roundId }         → sandboxed orchestrator, uploaded configs + BYOK key
+ */
+export interface StartOptions {
+  real?: boolean;
+  roundId?: string;
+}
+
 export interface ArenaStream {
   task: TaskMeta | null;
   panels: PanelState[];
   running: boolean;
   hasRun: boolean;
-  /** real=true hits the sandboxed orchestrator (?real=1); false replays the simulation */
-  start: (real?: boolean) => void;
+  start: (opts?: StartOptions) => void;
 }
 
 function appendLine(log: LogItem[], cls: LogLineClass, text: string): LogItem[] {
@@ -89,17 +100,19 @@ export function useArenaStream(): ArenaStream {
   const [hasRun, setHasRun] = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
-  const start = useCallback((real = false) => {
+  const start = useCallback((opts: StartOptions = {}) => {
     esRef.current?.close();
     setPanels([]);
     setTask(null);
     setRunning(true);
     setHasRun(true);
 
-    // cache-bust so Replay always reconnects to a fresh round; ?real=1 selects the
-    // sandboxed orchestrator over the simulated replay (identical event contract).
+    // cache-bust so Replay always reconnects to a fresh round. `roundId` claims a
+    // round staged by POST /api/run — it is a single-use handle, not a secret to
+    // reuse, which is why the key itself never travels on this request.
     const params = new URLSearchParams({ t: String(Date.now()) });
-    if (real) params.set("real", "1");
+    if (opts.roundId) params.set("roundId", opts.roundId);
+    else if (opts.real) params.set("real", "1");
     const es = new EventSource(`/api/run/stream?${params}`);
     esRef.current = es;
 

@@ -1,0 +1,27 @@
+{
+  "contenders": [
+    {
+      "name": "opus-planner",
+      "model": "claude-opus-5",
+      "effort": "high",
+      "thinking": true,
+      "maxSteps": 8,
+      "systemPrompt": "Think the algorithm through before you write anything. Prefer the solution with the best time and space complexity, and say what that complexity is in your final summary."
+    },
+    {
+      "name": "sonnet-fast",
+      "model": "claude-sonnet-5",
+      "effort": "low",
+      "thinking": false,
+      "maxSteps": 6,
+      "systemPrompt": "Optimise for speed. Write the most obvious correct solution immediately and run the tests. Do not explore alternatives."
+    },
+    {
+      "name": "haiku-scrappy",
+      "model": "claude-haiku-4-5",
+      "maxSteps": 6,
+      "limits": { "timeoutMs": 15000, "memoryMb": 192 },
+      "systemPrompt": "You are on a tight budget. Keep every message short."
+    }
+  ]
+}

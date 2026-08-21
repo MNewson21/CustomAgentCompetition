@@ -10,6 +10,7 @@ import { mkdtemp, mkdir, chmod, writeFile, rm } from "node:fs/promises";
 import { join, sep } from "node:path";
 
 import type { StreamEvent } from "@/lib/events";
+import { totalTokens } from "@/lib/agent/models";
 import { runInSandbox, type SandboxLimits } from "@/lib/sandbox/dockerSandbox";
 import type { AgentBrain, BrainContext } from "@/lib/agent/brain";
 import type { CodingTask } from "@/lib/agent/tasks";
@@ -22,7 +23,7 @@ export type ContenderEmit = (ev: EmitEvent) => void;
 
 const TOKENS_PER_CHAR = 1 / 3.2; // rough live-meter estimate, matches the UI mock
 const USD_PER_TOKEN = 0.000012;
-const MAX_STEPS = 32; // guard against a runaway brain
+const MAX_STEPS = 32; // guard against a runaway brain (hard ceiling; a config may ask for fewer)
 
 // Scratch lives INSIDE the project, not /tmp: this box runs snap Docker (Ubuntu
 // Core), whose confinement can't bind-mount host /tmp — the mount would silently
@@ -35,6 +36,8 @@ export interface RunContenderOptions {
   task: CodingTask;
   emit: ContenderEmit;
   limits?: Partial<SandboxLimits>;
+  /** per-config step cap; clamped to MAX_STEPS, which the host always enforces */
+  maxSteps?: number;
 }
 
 export interface RunContenderResult {
@@ -72,10 +75,24 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
   const { contenderId, brain, task, emit } = opts;
   const started = Date.now();
 
+  // Two usage sources, one meter. A model-backed brain reports the real token
+  // counts it was billed for; StubBrain has none, so we fall back to the
+  // character estimate that drove the original mock. `reported` wins whenever
+  // it exists so a BYOK round shows the user's actual spend.
+  let estimated = 0;
   let tokens = 0;
+  let costUsd = 0;
   const bump = (text: string) => {
-    tokens += Math.max(1, Math.round(text.length * TOKENS_PER_CHAR));
-    emit({ type: "usage", contenderId, tokens, costUsd: Number((tokens * USD_PER_TOKEN).toFixed(4)) });
+    estimated += Math.max(1, Math.round(text.length * TOKENS_PER_CHAR));
+    const reported = brain.usage?.();
+    if (reported) {
+      tokens = totalTokens(reported.tokens);
+      costUsd = reported.costUsd;
+    } else {
+      tokens = estimated;
+      costUsd = Number((estimated * USD_PER_TOKEN).toFixed(4));
+    }
+    emit({ type: "usage", contenderId, tokens, costUsd });
   };
 
   emit({ type: "status", contenderId, state: "running" });
@@ -88,15 +105,20 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
   let pass = false;
   let lastTestOutput: string | undefined;
   let lastTestPassed: boolean | undefined;
+  // Surfaced back to the brain so a model that names a bad file can correct
+  // itself, instead of silently believing the write succeeded.
+  let lastError: string | undefined;
+  const steps = Math.min(opts.maxSteps ?? MAX_STEPS, MAX_STEPS);
 
   try {
     // The grader is written by the host, never by the agent.
     await writeFile(join(scratch, task.testFile.name), task.testFile.content, "utf8");
 
-    for (let step = 0; step < MAX_STEPS; step++) {
-      const ctx: BrainContext = { step, lastTestOutput, lastTestPassed };
+    for (let step = 0; step < steps; step++) {
+      const ctx: BrainContext = { step, lastTestOutput, lastTestPassed, lastError };
       const action = await brain.next(ctx);
       if (!action || action.type === "submit") break;
+      lastError = undefined;
 
       switch (action.type) {
         case "reasoning":
@@ -112,7 +134,8 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
         case "write_file": {
           const dest = safeSolutionPath(scratch, action.path);
           if (!dest) {
-            emit({ type: "tool_result", contenderId, text: `✗ rejected unsafe path: ${action.path}` });
+            lastError = `rejected unsafe path "${action.path}" — use a bare *.py filename in the workspace`;
+            emit({ type: "tool_result", contenderId, text: `✗ ${lastError}` });
             break;
           }
           await writeFile(dest, action.content, "utf8");
@@ -172,16 +195,14 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
     emit({ type: "result", contenderId, pass, summary });
     emit({ type: "status", contenderId, state: pass ? "pass" : "fail" });
   } catch (err) {
+    // AnthropicBrainError messages are already redacted and human-readable; for
+    // anything else fall back to the raw string.
+    const detail = err instanceof Error ? err.message : String(err);
     emit({ type: "status", contenderId, state: "error" });
-    emit({ type: "result", contenderId, pass: false, summary: `✗ ERROR · ${String(err)}` });
+    emit({ type: "result", contenderId, pass: false, summary: `✗ ERROR · ${detail}` });
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
 
-  return {
-    pass,
-    tokens,
-    costUsd: Number((tokens * USD_PER_TOKEN).toFixed(4)),
-    durationMs: Date.now() - started,
-  };
+  return { pass, tokens, costUsd, durationMs: Date.now() - started };
 }

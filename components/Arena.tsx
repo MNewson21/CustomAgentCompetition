@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ContenderPanel } from "@/components/ContenderPanel";
+import { EXAMPLE_ROSTER, RoundSetup } from "@/components/RoundSetup";
 import { useArenaStream, type PanelState } from "@/components/useArenaStream";
 
 // Winner = the passing contender that spent the least, tie-broken by wall-clock
@@ -19,12 +20,37 @@ function pickWinner(panels: PanelState[], running: boolean): string | null {
   return best.id;
 }
 
+// How the round is sourced. `sim` replays canned data, `stub` runs the real
+// sandboxed orchestrator with a deterministic key-free brain, `byok` runs
+// uploaded agent configs against the user's own API key. All three land on the
+// same SSE contract, so everything below the mode switch is shared.
+type Mode = "sim" | "stub" | "byok";
+
+const MODE_LABELS: Record<Mode, string> = {
+  sim: "○ Simulated",
+  stub: "◐ Sandbox",
+  byok: "● BYOK",
+};
+
+const MODE_TITLES: Record<Mode, string> = {
+  sim: "Replaying simulated round data — no containers, no API calls",
+  stub: "Real Docker sandbox, deterministic stub agents — no API key needed",
+  byok: "Real Docker sandbox, your agent configs, billed to your Anthropic key",
+};
+
 export function Arena() {
   const { task, panels, running, hasRun, start } = useArenaStream();
   const [now, setNow] = useState(() => Date.now());
   const [theme, setTheme] = useState<"dark" | "light">("dark");
-  // false = simulated replay; true = real sandboxed orchestrator (?real=1)
-  const [realMode, setRealMode] = useState(false);
+  const [mode, setMode] = useState<Mode>("sim");
+
+  // BYOK inputs live here, not in RoundSetup, so exactly one component ever
+  // holds the key and exactly one code path ever transmits it.
+  const [apiKey, setApiKey] = useState("");
+  const [roster, setRoster] = useState(EXAMPLE_ROSTER);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [accepted, setAccepted] = useState<string | null>(null);
+  const [staging, setStaging] = useState(false);
 
   // wall-clock tick drives the per-panel live timers while a round is running
   useEffect(() => {
@@ -39,8 +65,62 @@ export function Arena() {
     document.documentElement.setAttribute("data-theme", next);
   };
 
+  const runRound = useCallback(async () => {
+    if (mode !== "byok") {
+      setSetupError(null);
+      start({ real: mode === "stub" });
+      return;
+    }
+
+    // Parse locally first so an obvious typo doesn't cost a round trip that
+    // carries the key. The server re-validates regardless — this is UX, not a
+    // security boundary.
+    let contenders: unknown;
+    try {
+      contenders = JSON.parse(roster);
+    } catch (err) {
+      setAccepted(null);
+      setSetupError(`agent configs are not valid JSON — ${(err as Error).message}`);
+      return;
+    }
+
+    setStaging(true);
+    try {
+      const res = await fetch("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey, contenders }),
+      });
+      const body = (await res.json()) as {
+        roundId?: string;
+        error?: string;
+        contenders?: { name: string; model: string; effort: string; maxSteps: number }[];
+      };
+
+      if (!res.ok || !body.roundId) {
+        setAccepted(null);
+        setSetupError(body.error ?? `could not stage the round (HTTP ${res.status})`);
+        return;
+      }
+
+      setSetupError(null);
+      setAccepted(
+        `staged ${body.contenders?.length ?? 0} contender(s): ` +
+          (body.contenders ?? [])
+            .map((c) => `${c.name} (${c.model}, effort ${c.effort}, ≤${c.maxSteps} steps)`)
+            .join("  ·  "),
+      );
+      start({ roundId: body.roundId });
+    } catch {
+      setAccepted(null);
+      setSetupError("could not reach the server");
+    } finally {
+      setStaging(false);
+    }
+  }, [apiKey, mode, roster, start]);
+
   const winnerId = useMemo(() => pickWinner(panels, running), [panels, running]);
-  const contenderCount = panels.length;
+  const busy = running || staging;
 
   return (
     <div className="wrap">
@@ -55,33 +135,44 @@ export function Arena() {
           <button className="toggle" onClick={toggleTheme}>
             {theme === "dark" ? "◐ Light" : "◐ Dark"}
           </button>
-          <button
-            className="toggle"
-            onClick={() => setRealMode((r) => !r)}
-            disabled={running}
-            title={
-              realMode
-                ? "Running agents in real sandboxed Docker containers"
-                : "Replaying simulated round data"
-            }
-          >
-            {realMode ? "● Real sandbox" : "○ Simulated"}
-          </button>
-          <button className="btn btn-secondary" onClick={() => start(realMode)} disabled={running}>
+          <div className="modes" role="group" aria-label="Round source">
+            {(Object.keys(MODE_LABELS) as Mode[]).map((m) => (
+              <button
+                key={m}
+                aria-pressed={mode === m}
+                title={MODE_TITLES[m]}
+                disabled={busy}
+                onClick={() => setMode(m)}
+              >
+                {MODE_LABELS[m]}
+              </button>
+            ))}
+          </div>
+          <button className="btn btn-secondary" onClick={() => void runRound()} disabled={busy}>
             ↻ Replay
           </button>
-          <button className="btn btn-primary" onClick={() => start(realMode)} disabled={running}>
-            ▶ Run round
+          <button className="btn btn-primary" onClick={() => void runRound()} disabled={busy}>
+            {staging ? "Staging…" : "▶ Run round"}
           </button>
         </div>
       </div>
 
+      {mode === "byok" && (
+        <RoundSetup
+          apiKey={apiKey}
+          onApiKeyChange={setApiKey}
+          roster={roster}
+          onRosterChange={setRoster}
+          error={setupError}
+          accepted={accepted}
+          disabled={busy}
+        />
+      )}
+
       <div className="taskbar">
         <span className="title">{task ? task.title : "Reverse Linked List"}</span>
         <span className="badge">{task ? task.type : "coding"}</span>
-        <span className="meta-mono">
-          {contenderCount || 3} contenders · parallel
-        </span>
+        <span className="meta-mono">{panels.length || 3} contenders · parallel</span>
         {running ? (
           <span className="live">
             <span className="dot" />

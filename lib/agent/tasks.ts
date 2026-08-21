@@ -81,3 +81,17 @@ export const REVERSE_LINKED_LIST: CodingTask = {
   testFile: { name: "test_solution.py", content: REVERSE_TESTS },
   testCmd: ["python", "-m", "unittest", "-v", "test_solution"],
 };
+
+// The bench. One coding task today; `type: "coding"` already distinguishes it
+// from the open-ended, evaluator-scored tasks that land in build-order step 4,
+// so callers select by id rather than importing the constant directly.
+export const TASKS: Record<string, CodingTask> = {
+  [REVERSE_LINKED_LIST.id]: REVERSE_LINKED_LIST,
+};
+
+export const DEFAULT_TASK_ID = REVERSE_LINKED_LIST.id;
+
+export function getTask(id: string | null | undefined): CodingTask | null {
+  if (!id) return TASKS[DEFAULT_TASK_ID];
+  return TASKS[id] ?? null;
+}

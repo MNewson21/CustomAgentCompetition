@@ -96,7 +96,9 @@ body {
 .live.idle .dot { background:var(--text-tertiary); animation:none; }
 
 /* ── Board / panels ───────────────────────────────────────────────────── */
-.board { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+/* auto-fit rather than a fixed 3 columns: a BYOK roster is 1–4 contenders, and
+   a fixed grid leaves a lone panel stretched across a third of the viewport. */
+.board { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; }
 @media (max-width:920px) { .board { grid-template-columns:1fr; } }
 
 .panel { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--r-lg);
@@ -148,6 +150,39 @@ body {
 .pfoot { display:flex; gap:14px; padding:9px 13px; border-top:1px solid var(--border-default);
   font-family:var(--font-mono); font-size:.6875rem; color:var(--text-secondary); }
 .pfoot b { color:var(--text-primary); font-weight:500; }
+
+/* ── BYOK setup panel ──────────────────────────────────── */
+.modes { display:inline-flex; border:1px solid var(--border-default); border-radius:var(--r-md); overflow:hidden; }
+.modes button { font:inherit; font-size:.75rem; font-weight:500; cursor:pointer; background:var(--bg-surface);
+  color:var(--text-secondary); border:none; padding:6px 11px; transition:all .12s var(--ease); }
+.modes button + button { border-left:1px solid var(--border-default); }
+.modes button:hover:not(:disabled) { color:var(--text-primary); }
+.modes button[aria-pressed="true"] { background:var(--accent); color:#fff; }
+.modes button:disabled { opacity:.5; cursor:not-allowed; }
+
+.setup { background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--r-lg);
+  padding:16px; margin-bottom:16px; display:flex; flex-direction:column; gap:14px; }
+.setup .shead { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+.setup .shead h2 { font-size:.875rem; font-weight:600; }
+.field { display:flex; flex-direction:column; gap:6px; }
+.field label { font-size:.75rem; font-weight:500; color:var(--text-secondary); }
+.input, .textarea { font-family:var(--font-mono); font-size:.75rem; background:var(--bg-inset);
+  color:var(--text-primary); border:1px solid var(--border-default); border-radius:var(--r-md);
+  padding:9px 11px; width:100%; transition:border-color .12s var(--ease); }
+.input:focus, .textarea:focus { border-color:var(--accent); }
+.textarea { min-height:190px; resize:vertical; line-height:1.6; white-space:pre; overflow-x:auto; }
+.hint { font-size:.6875rem; color:var(--text-tertiary); line-height:1.5; }
+.hint code { font-family:var(--font-mono); color:var(--text-secondary); }
+.setup-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.filebtn { font:inherit; font-size:.75rem; font-weight:500; cursor:pointer; background:var(--bg-surface);
+  color:var(--text-primary); border:1px solid var(--border-default); border-radius:var(--r-md); padding:6px 10px; }
+.filebtn:hover { border-color:var(--border-strong); }
+.notice { font-size:.75rem; font-family:var(--font-mono); border-radius:var(--r-md); padding:8px 11px;
+  border:1px solid var(--border-default); white-space:pre-wrap; word-break:break-word; }
+.notice.err { color:var(--status-fail); border-color:color-mix(in srgb,var(--status-fail) 40%,transparent);
+  background:color-mix(in srgb,var(--status-fail) 8%,transparent); }
+.notice.ok { color:var(--status-pass); border-color:color-mix(in srgb,var(--status-pass) 40%,transparent);
+  background:color-mix(in srgb,var(--status-pass) 8%,transparent); }
 
 @media (prefers-reduced-motion: reduce) {
   *, .live .dot, .pill.run .d, .cursor { animation: none !important; }

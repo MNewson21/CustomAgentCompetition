@@ -1,14 +1,22 @@
 import { CONTENDERS, TASK, type ContenderDef, type ScriptStep } from "@/lib/contenders";
-import type { StreamEvent } from "@/lib/events";
-import { reverseContenders } from "@/lib/agent/brain";
-import { REVERSE_LINKED_LIST } from "@/lib/agent/tasks";
+import type { ContenderMeta, StreamEvent } from "@/lib/events";
+import { reverseContenders, type AgentBrain } from "@/lib/agent/brain";
+import { AnthropicBrain } from "@/lib/agent/anthropicBrain";
+import { getTask, REVERSE_LINKED_LIST, type CodingTask } from "@/lib/agent/tasks";
 import { runContender } from "@/lib/agent/runLoop";
+import type { AgentConfig } from "@/lib/agent/config";
+import { takeRound } from "@/lib/rounds";
 
 // SSE endpoint. Fans out all contenders on independent timelines and multiplexes
-// their events into one stream, exactly as the real orchestrator will. The browser
-// connects with `new EventSource('/api/run/stream')` and routes each event to its
-// panel by `contenderId`. Swap the CONTENDERS replay below for a real agent runner
-// and the client contract is unchanged.
+// their events into one stream. The browser connects with
+// `new EventSource('/api/run/stream')` and routes each event to its panel by
+// `contenderId`.
+//
+// Three modes, ONE event contract — the client code is identical for all three:
+//   (default)     replay the simulated round data in lib/contenders.ts
+//   ?real=1       real sandboxed orchestrator driven by the deterministic StubBrain
+//   ?roundId=…    real orchestrator driven by uploaded agent configs against the
+//                 user's own API key, staged by POST /api/run (see lib/rounds.ts)
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,13 +41,57 @@ function stepText(s: ScriptStep): string {
   }
 }
 
+/** One contender, ready to run: who it is, what drives it, how much sandbox it gets. */
+interface RosterEntry {
+  meta: ContenderMeta;
+  brain: AgentBrain;
+  /** present only for BYOK contenders; stub contenders use the host defaults */
+  config?: AgentConfig;
+}
+
+interface RoundPlan {
+  task: CodingTask;
+  roster: RosterEntry[];
+}
+
 export async function GET(req: Request) {
   const encoder = new TextEncoder();
   let seq = 0;
 
-  // ?real=1 swaps the simulated replay for the real sandboxed orchestrator
-  // (build-order step 1). The client contract is byte-for-byte identical.
-  const real = new URL(req.url).searchParams.get("real") === "1";
+  const params = new URL(req.url).searchParams;
+  const roundId = params.get("roundId");
+
+  // Resolve the round BEFORE opening the stream: a bad or spent round id should
+  // be an honest HTTP error, not an SSE connection that dies with no events.
+  let plan: RoundPlan | null = null;
+  if (roundId) {
+    const round = takeRound(roundId);
+    if (!round) {
+      return Response.json(
+        { error: "round not found, already started, or expired — stage a new one" },
+        { status: 404 },
+      );
+    }
+    const task = getTask(round.taskId);
+    if (!task) return Response.json({ error: `unknown task: ${round.taskId}` }, { status: 404 });
+
+    plan = {
+      task,
+      roster: round.configs.map((config, i) => ({
+        // Ids are positional and server-assigned — the config author never
+        // supplies one, so they can't collide or spoof another panel.
+        meta: { id: `c${i}`, name: config.name, model: `${config.model} · ${config.effort}` },
+        brain: new AnthropicBrain(config, task, round.apiKey),
+        config,
+      })),
+    };
+  } else if (params.get("real") === "1") {
+    plan = {
+      task: REVERSE_LINKED_LIST,
+      // Fresh, single-use brains per round: StubBrain consumes its script.
+      roster: reverseContenders().map(({ meta, brain }) => ({ meta, brain })),
+    };
+  }
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -131,29 +183,25 @@ export async function GET(req: Request) {
         });
       };
 
-      // REAL MODE: run the sandboxed orchestrator. Same multiplexed stream, but
-      // every event comes from an actual agent run whose code executed in a
-      // locked-down Docker container. `send` already assigns seq, so runContender's
-      // emit plugs straight in.
-      if (real) {
+      // REAL MODES: every event below comes from an actual agent run whose code
+      // executed in a locked-down Docker container. `send` already assigns seq,
+      // so runContender's emit plugs straight in.
+      if (plan) {
         void (async () => {
-          const roster = reverseContenders(); // fresh, single-use brains per round
           send({
             type: "init",
-            task: {
-              title: REVERSE_LINKED_LIST.title,
-              type: REVERSE_LINKED_LIST.type,
-              prompt: REVERSE_LINKED_LIST.prompt,
-            },
-            contenders: roster.map((c) => c.meta),
+            task: { title: plan.task.title, type: plan.task.type, prompt: plan.task.prompt },
+            contenders: plan.roster.map((c) => c.meta),
           });
           await Promise.all(
-            roster.map((c) =>
+            plan.roster.map((c) =>
               runContender({
                 contenderId: c.meta.id,
                 brain: c.brain,
-                task: REVERSE_LINKED_LIST,
+                task: plan.task,
                 emit: send,
+                limits: c.config?.limits,
+                maxSteps: c.config?.maxSteps,
               }),
             ),
           );

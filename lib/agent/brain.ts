@@ -4,6 +4,7 @@
 // that calls the model — the run loop and sandbox never change.
 
 import type { ContenderMeta } from "@/lib/events";
+import type { TokenUsage } from "@/lib/agent/models";
 
 export type AgentAction =
   | { type: "reasoning"; text: string }
@@ -19,6 +20,12 @@ export interface BrainContext {
   lastTestOutput?: string;
   /** whether the most recent run_tests passed */
   lastTestPassed?: boolean;
+  /**
+   * Why the most recently executed action failed, if it did (e.g. the run loop
+   * rejected a write_file path). A model-backed brain feeds this back as an
+   * error tool_result so the agent can correct itself instead of looping.
+   */
+  lastError?: string;
 }
 
 export interface AgentBrain {
@@ -26,6 +33,13 @@ export interface AgentBrain {
   readonly label: string;
   /** next action, or null when the agent is done */
   next(ctx: BrainContext): Promise<AgentAction | null>;
+  /**
+   * Real cumulative usage, when the brain talks to a model that reports it.
+   * Brains that don't (StubBrain) omit this and the run loop falls back to its
+   * character-count estimate — so the meter always shows something, but a BYOK
+   * round shows the number the user is actually billed for.
+   */
+  usage?(): { tokens: TokenUsage; costUsd: number };
 }
 
 /**
