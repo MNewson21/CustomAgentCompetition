@@ -1,5 +1,11 @@
 // The real brain: drives one contender with the Anthropic Messages API.
 //
+// "Anthropic" here means the wire protocol, not necessarily the vendor. The
+// client is pointed at whatever baseURL the model's provider declares, so an
+// OpenRouter-served open-weights model runs through this same class — the skin
+// speaks Messages, tool_use and tool_result survive the round trip, and the
+// Anthropic-only request fields are switched off by capability flags.
+//
 // It plugs into the exact same AgentBrain interface as StubBrain, so the run
 // loop, the Docker sandbox, and the StreamEvent contract are untouched. The
 // model never executes anything itself — it emits tool calls, the host runs
@@ -15,7 +21,7 @@ import Anthropic from "@anthropic-ai/sdk";
 
 import type { AgentAction, AgentBrain, BrainContext } from "@/lib/agent/brain";
 import type { AgentConfig } from "@/lib/agent/config";
-import { EMPTY_USAGE, MODELS, priceUsage, type TokenUsage } from "@/lib/agent/models";
+import { EMPTY_USAGE, MODELS, priceUsage, providerOf, type TokenUsage } from "@/lib/agent/models";
 import type { CodingTask } from "@/lib/agent/tasks";
 
 const TOOLS: Anthropic.Tool[] = [
@@ -65,9 +71,14 @@ function systemPrompt(task: CodingTask, config: AgentConfig): string {
   return author ? `${base}\n\n---\n\n${author}` : base;
 }
 
-/** Never let a key reach a log line or a stream event, whatever the SDK put in the message. */
+/**
+ * Never let a key reach a log line or a stream event, whatever the SDK put in
+ * the message. The placeholder is generic because keys are no longer all
+ * `sk-ant-…` — echoing a provider-shaped prefix back would leak which provider
+ * a failing round was talking to.
+ */
 function redact(text: string, apiKey: string): string {
-  return apiKey ? text.split(apiKey).join("sk-ant-***") : text;
+  return apiKey ? text.split(apiKey).join("***redacted***") : text;
 }
 
 export class AnthropicBrainError extends Error {}
@@ -76,6 +87,8 @@ export class AnthropicBrain implements AgentBrain {
   readonly label: string;
 
   private readonly client: Anthropic;
+  /** provider display name, used only to make connection errors legible */
+  private readonly provider: string;
   private readonly messages: Anthropic.MessageParam[] = [];
   private readonly system: string;
   private readonly tools: Anthropic.Tool[];
@@ -93,8 +106,18 @@ export class AnthropicBrain implements AgentBrain {
     task: CodingTask,
     private readonly apiKey: string,
   ) {
+    const provider = providerOf(config.model);
+    this.provider = provider.label;
     this.label = `${MODELS[config.model].label} · byok`;
-    this.client = new Anthropic({ apiKey, maxRetries: 2 });
+    // authStyle decides which header carries the credential: Anthropic reads
+    // x-api-key (the SDK's `apiKey`), OpenRouter reads Authorization: Bearer
+    // (the SDK's `authToken`). Passing a key through the wrong one is a 401 even
+    // when the key itself is valid, so this is not cosmetic.
+    this.client = new Anthropic({
+      ...(provider.authStyle === "bearer" ? { authToken: apiKey } : { apiKey }),
+      ...(provider.baseURL ? { baseURL: provider.baseURL } : {}),
+      maxRetries: 2,
+    });
     this.system = systemPrompt(task, config);
     this.tools = TOOLS.filter((t) => (config.tools as string[]).includes(t.name));
     this.messages.push({ role: "user", content: task.prompt });
@@ -175,7 +198,7 @@ export class AnthropicBrain implements AgentBrain {
       this.accumulate(message.usage);
       return message;
     } catch (err) {
-      throw new AnthropicBrainError(redact(describe(err), this.apiKey));
+      throw new AnthropicBrainError(redact(describe(err, this.provider), this.apiKey));
     }
   }
 
@@ -249,13 +272,13 @@ export class AnthropicBrain implements AgentBrain {
 }
 
 /** Typed SDK errors carry the useful part; fall back to the raw string otherwise. */
-function describe(err: unknown): string {
-  if (err instanceof Anthropic.AuthenticationError) return "invalid API key (401)";
+function describe(err: unknown, provider: string): string {
+  if (err instanceof Anthropic.AuthenticationError) return `invalid ${provider} API key (401)`;
   if (err instanceof Anthropic.PermissionDeniedError) return "API key lacks access to this model (403)";
   if (err instanceof Anthropic.NotFoundError) return "model not found (404)";
   if (err instanceof Anthropic.RateLimitError) return "rate limited (429) — retries exhausted";
   // APIConnectionError extends APIError in this SDK, so it must be checked first.
-  if (err instanceof Anthropic.APIConnectionError) return "could not reach the Anthropic API";
+  if (err instanceof Anthropic.APIConnectionError) return `could not reach the ${provider} API`;
   if (err instanceof Anthropic.APIError) return `API error ${err.status ?? "?"}: ${err.message}`;
   return String(err);
 }

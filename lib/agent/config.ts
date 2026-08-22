@@ -16,7 +16,16 @@
 // only api.anthropic.com); see CLAUDE.local.md §9. The sandboxed-execution core
 // is already a strict sub-component of it.
 
-import { DEFAULT_MODEL, isModelId, MODEL_IDS, type ModelId } from "@/lib/agent/models";
+import {
+  DEFAULT_MODEL,
+  isKeyShapedFor,
+  isModelId,
+  MODEL_IDS,
+  MODELS,
+  PROVIDERS,
+  type ModelId,
+  type ProviderId,
+} from "@/lib/agent/models";
 
 export const TOOL_NAMES = ["write_file", "run_tests"] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -199,7 +208,41 @@ export function parseRoster(raw: unknown): AgentConfig[] {
   return configs;
 }
 
-/** Shape of an Anthropic API key, checked before we spend a round finding out. */
-export function isApiKeyShaped(key: unknown): key is string {
-  return typeof key === "string" && /^sk-ant-[A-Za-z0-9_-]{20,}$/.test(key.trim());
+/**
+ * Which provider a whole roster needs a key for.
+ *
+ * A round carries exactly ONE credential, so every contender in it has to be
+ * served by the same provider. Mixing (say) an Anthropic model and an OpenRouter
+ * free model in one roster would need two keys; rather than silently authenticate
+ * half the field, that is rejected with a message naming the offenders.
+ */
+export function rosterProvider(configs: AgentConfig[]): ProviderId {
+  const seen = new Map<ProviderId, string[]>();
+  for (const c of configs) {
+    const p = MODELS[c.model].provider;
+    const names = seen.get(p);
+    if (names) names.push(c.name);
+    else seen.set(p, [c.name]);
+  }
+  if (seen.size > 1) {
+    const groups = [...seen.entries()]
+      .map(([p, names]) => `${PROVIDERS[p].label} (${names.join(", ")})`)
+      .join(" vs ");
+    throw new ConfigError(
+      `a round uses one API key, so every contender must share a provider — got ${groups}`,
+    );
+  }
+  // parseRoster rejects an empty list, so there is always exactly one entry here.
+  return [...seen.keys()][0];
+}
+
+/**
+ * Shape of the credential for a given provider, checked before we spend a round
+ * finding out. Each provider owns its own pattern (see PROVIDERS) because the
+ * failure modes differ: an OpenRouter key sent to Anthropic is a 401, and so is
+ * an `sk-ant-oat01-…` OAuth token, which needs a bearer header rather than the
+ * x-api-key one the SDK's `apiKey` option sets.
+ */
+export function isApiKeyShaped(provider: ProviderId, key: unknown): key is string {
+  return isKeyShapedFor(provider, key);
 }
