@@ -1,6 +1,6 @@
 import type { ContenderMeta, TaskMeta } from "@/lib/events";
 
-// Simulated round data — the stand-in for a real orchestrator.
+// Simulated round data - the stand-in for a real orchestrator.
 //
 // These scripts are replayed by app/api/run/stream/route.ts over SSE so the whole
 // transport + UI works end to end before the sandboxed agent runner exists. When
@@ -38,7 +38,7 @@ export const CONTENDERS: ContenderDef[] = [
     speedMs: 210,
     steps: [
       { type: "reasoning", text: "reading task: reverse a singly linked list…" },
-      { type: "text", text: "Plan: iterative in-place reversal — O(n) time, O(1) space." },
+      { type: "text", text: "Plan: iterative in-place reversal - O(n) time, O(1) space." },
       { type: "tool_use", name: "write_file", display: "→ write_file  solution.py" },
       { type: "code", file: SOLUTION, line: "def reverse(head):" },
       { type: "code", file: SOLUTION, line: "    prev = None" },
@@ -59,7 +59,7 @@ export const CONTENDERS: ContenderDef[] = [
     model: "baseline",
     speedMs: 300,
     steps: [
-      { type: "reasoning", text: "recursive vs iterative — going recursive for clarity." },
+      { type: "reasoning", text: "recursive vs iterative - going recursive for clarity." },
       { type: "text", text: "Recurse to the tail, then rewire pointers on the way back." },
       { type: "tool_use", name: "write_file", display: "→ write_file  solution.py" },
       { type: "code", file: SOLUTION, line: "def reverse(head):" },
@@ -80,7 +80,7 @@ export const CONTENDERS: ContenderDef[] = [
     model: "community",
     speedMs: 260,
     steps: [
-      { type: "reasoning", text: "maybe a shortcut works — just return the head?" },
+      { type: "reasoning", text: "maybe a shortcut works - just return the head?" },
       { type: "text", text: "Attempting a minimal edit and hoping the tests are weak." },
       { type: "tool_use", name: "write_file", display: "→ write_file  solution.py" },
       { type: "code", file: SOLUTION, line: "def reverse(head):" },

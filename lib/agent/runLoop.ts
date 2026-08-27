@@ -1,4 +1,4 @@
-// Single-contender run loop — build-order step 1.
+// Single-contender run loop - build-order step 1.
 //
 // Drives one agent (any AgentBrain) against one CodingTask and emits the real
 // StreamEvent contract as it goes. Every execution of agent-produced code happens
@@ -26,7 +26,7 @@ const USD_PER_TOKEN = 0.000012;
 const MAX_STEPS = 32; // guard against a runaway brain (hard ceiling; a config may ask for fewer)
 
 // Scratch lives INSIDE the project, not /tmp: this box runs snap Docker (Ubuntu
-// Core), whose confinement can't bind-mount host /tmp — the mount would silently
+// Core), whose confinement can't bind-mount host /tmp - the mount would silently
 // come up empty. Anywhere under $HOME/the project is visible to the daemon.
 const SANDBOX_ROOT = join(process.cwd(), ".arena-sandbox");
 
@@ -47,7 +47,7 @@ export interface RunContenderResult {
   durationMs: number;
 }
 
-/** Only allow a bare `*.py` filename inside the scratch dir — no traversal, no subdirs. */
+/** Only allow a bare `*.py` filename inside the scratch dir - no traversal, no subdirs. */
 function safeSolutionPath(scratch: string, name: string): string | null {
   if (!/^[A-Za-z0-9_.-]+\.py$/.test(name)) return null;
   const resolved = join(scratch, name);
@@ -102,13 +102,21 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
   // mkdtemp makes the dir 0700; the sandbox runs as `nobody` (uid 65534) and must
   // be able to traverse + read the read-only mount, so open it to o+rx.
   await chmod(scratch, 0o755);
-  let pass = false;
   let lastTestOutput: string | undefined;
   let lastTestPassed: boolean | undefined;
+  // True once the workspace has been written to since the last run_tests. The
+  // verdict grades the FINAL state of the workspace, so a contender that passes
+  // and then overwrites solution.py has not demonstrated a passing solution -
+  // without this, a late edit inherits the earlier green run.
+  let dirtySinceTest = false;
+  // Distinguishes "the agent decided it was finished" from "the host cut it off",
+  // which otherwise both surface as a bare FAIL.
+  let exhausted = false;
   // Surfaced back to the brain so a model that names a bad file can correct
   // itself, instead of silently believing the write succeeded.
   let lastError: string | undefined;
   const steps = Math.min(opts.maxSteps ?? MAX_STEPS, MAX_STEPS);
+  let pass = false;
 
   try {
     // The grader is written by the host, never by the agent.
@@ -119,6 +127,9 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
       const action = await brain.next(ctx);
       if (!action || action.type === "submit") break;
       lastError = undefined;
+      // Reaching the last permitted step without submitting means the cap, not
+      // the agent, ended the run.
+      exhausted = step === steps - 1;
 
       switch (action.type) {
         case "reasoning":
@@ -134,11 +145,12 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
         case "write_file": {
           const dest = safeSolutionPath(scratch, action.path);
           if (!dest) {
-            lastError = `rejected unsafe path "${action.path}" — use a bare *.py filename in the workspace`;
+            lastError = `rejected unsafe path "${action.path}" - use a bare *.py filename in the workspace`;
             emit({ type: "tool_result", contenderId, text: `✗ ${lastError}` });
             break;
           }
           await writeFile(dest, action.content, "utf8");
+          dirtySinceTest = true;
           emit({ type: "tool_use", contenderId, name: "write_file", display: `→ write_file  ${action.path}` });
           for (const line of action.content.replace(/\n$/, "").split("\n")) {
             emit({ type: "code", contenderId, file: action.path, line });
@@ -166,7 +178,7 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
           lastTestOutput = `${res.stdout}\n${res.stderr}`.trim();
           const contained = res.timedOut || res.oomKilled;
           lastTestPassed = res.exitCode === 0 && !contained;
-          pass = lastTestPassed;
+          dirtySinceTest = false;
 
           if (res.timedOut) {
             emit({ type: "tool_result", contenderId, text: `✗ killed: exceeded time limit` });
@@ -189,9 +201,33 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
       }
     }
 
-    const summary = pass
-      ? `✓ PASS · tests green`
-      : `✗ FAIL · ${lastTestPassed === undefined ? "no tests run" : "tests failed"}`;
+    // The verdict is a property of the workspace as it was last graded, not of
+    // anything the agent said about itself.
+    pass = lastTestPassed === true && !dirtySinceTest;
+
+    if (exhausted) {
+      emit({
+        type: "tool_result",
+        contenderId,
+        text: `  stopped: reached the ${steps}-step limit before finishing`,
+      });
+    }
+
+    let summary: string;
+    if (pass) {
+      summary = "✓ PASS · tests green";
+    } else if (lastTestPassed === undefined) {
+      summary = exhausted
+        ? `✗ FAIL · never ran the tests (hit the ${steps}-step limit)`
+        : "✗ FAIL · never ran the tests";
+    } else if (dirtySinceTest) {
+      // Green run, then another edit. Grading the earlier run would credit code
+      // that no longer exists in the workspace.
+      summary = "✗ FAIL · solution was edited after the last test run - final version never graded";
+    } else {
+      summary = exhausted ? `✗ FAIL · tests failed (hit the ${steps}-step limit)` : "✗ FAIL · tests failed";
+    }
+
     emit({ type: "result", contenderId, pass, summary });
     emit({ type: "status", contenderId, state: pass ? "pass" : "fail" });
   } catch (err) {

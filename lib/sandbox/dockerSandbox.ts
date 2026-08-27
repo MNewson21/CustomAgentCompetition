@@ -43,7 +43,7 @@ export interface SandboxRequest {
   /** host path bind-mounted read-only at /work (the working directory) */
   workDirHost: string;
   limits?: Partial<SandboxLimits>;
-  /** only "none" is supported in the spike — the whole point is zero egress */
+  /** only "none" is supported in the spike - the whole point is zero egress */
   network?: "none";
 }
 
@@ -63,7 +63,7 @@ export interface SandboxResult {
 
 /**
  * Build the exact `docker run` argv for a sandboxed execution. Exported so the
- * flag set can be audited and mirrored by the bash isolation proof — there is
+ * flag set can be audited and mirrored by the bash isolation proof - there is
  * exactly one place that decides how locked-down a run is.
  */
 export function dockerArgs(name: string, req: SandboxRequest, limits: SandboxLimits): string[] {

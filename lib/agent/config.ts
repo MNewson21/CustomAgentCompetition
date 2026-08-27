@@ -1,4 +1,4 @@
-// The BYOK agent-config schema — build-order step 3.
+// The BYOK agent-config schema - build-order step 3.
 //
 // A contender uploaded by a user is DATA, not code: a declarative description of
 // how to drive the agent loop (which model, what system prompt, which tools, how
@@ -12,9 +12,9 @@
 // because they're shown verbatim in the upload panel.
 //
 // NOT in scope for this step: uploading arbitrary orchestration *code*. That
-// needs the agent-in-sandbox variant with an egress allowlist (container reaches
-// only api.anthropic.com); see CLAUDE.local.md §9. The sandboxed-execution core
-// is already a strict sub-component of it.
+// needs the agent-in-sandbox variant with an egress allowlist (the container
+// reaches only the model API). The sandboxed-execution core is already a strict
+// sub-component of it.
 
 import {
   DEFAULT_MODEL,
@@ -194,7 +194,7 @@ export function parseRoster(raw: unknown): AgentConfig[] {
         : null;
 
   if (!list) throw new ConfigError("expected a JSON array of agents, or { contenders: [...] }");
-  if (list.length === 0) throw new ConfigError("roster is empty — add at least one agent");
+  if (list.length === 0) throw new ConfigError("roster is empty - add at least one agent");
   if (list.length > MAX_CONTENDERS) {
     throw new ConfigError(`at most ${MAX_CONTENDERS} contenders per round (got ${list.length})`);
   }
@@ -229,7 +229,7 @@ export function rosterProvider(configs: AgentConfig[]): ProviderId {
       .map(([p, names]) => `${PROVIDERS[p].label} (${names.join(", ")})`)
       .join(" vs ");
     throw new ConfigError(
-      `a round uses one API key, so every contender must share a provider — got ${groups}`,
+      `a round uses one API key, so every contender must share a provider - got ${groups}`,
     );
   }
   // parseRoster rejects an empty list, so there is always exactly one entry here.

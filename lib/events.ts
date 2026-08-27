@@ -6,8 +6,8 @@
 // events (see lib/contenders.ts); later the real sandboxed orchestrator emits the
 // exact same shapes, and nothing on the client changes.
 //
-// Mirrors the target contract in CLAUDE.local.md — `{ contenderId, type, data }`,
-// type ∈ {text, tool_use, tool_result, status} — extended with the richer event
+// The base shape is `{ contenderId, type, data }` with
+// type ∈ {text, tool_use, tool_result, status}, extended with the richer event
 // kinds the stream UI needs (reasoning, code, usage, result, init, done).
 
 export type ContenderState = "queued" | "running" | "pass" | "fail" | "error";
