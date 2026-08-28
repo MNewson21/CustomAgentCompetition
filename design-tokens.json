@@ -1,0 +1,136 @@
+{
+  "$schema": "https://design-tokens.org/schema.json",
+  "meta": {
+    "name": "Agent Arena Design System",
+    "version": "0.1.0",
+    "direction": "Clean Technical — neutral grays, single blue accent, airy spacing, dev-tool minimal",
+    "themes": ["light", "dark"]
+  },
+  "primitives": {
+    "color": {
+      "gray": {
+        "0":   "#ffffff",
+        "25":  "#fbfcfd",
+        "50":  "#f6f8fa",
+        "100": "#eceff2",
+        "200": "#dfe3e8",
+        "300": "#c4cbd4",
+        "400": "#9aa4b1",
+        "500": "#6b7684",
+        "600": "#4d5763",
+        "700": "#363d47",
+        "800": "#22272e",
+        "900": "#141821",
+        "950": "#0c0e13"
+      },
+      "blue": {
+        "50":  "#eef4ff",
+        "100": "#dbe6ff",
+        "200": "#bcd2ff",
+        "300": "#8fb3ff",
+        "400": "#5b8cff",
+        "500": "#2f6bff",
+        "600": "#1f52d6",
+        "700": "#1840a8",
+        "800": "#17357f"
+      },
+      "green": { "400": "#34d399", "500": "#22c55e", "600": "#16a34a", "700": "#15803d" },
+      "red":   { "400": "#f87171", "500": "#ef4444", "600": "#dc2626", "700": "#b91c1c" },
+      "amber": { "400": "#fbbf24", "500": "#f59e0b", "600": "#d97706", "700": "#b45309" }
+    },
+    "font": {
+      "family": {
+        "sans": "\"Inter\", system-ui, -apple-system, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif",
+        "mono": "\"JetBrains Mono\", \"SF Mono\", ui-monospace, Menlo, Consolas, monospace"
+      },
+      "size": {
+        "2xs":  "0.6875rem",
+        "xs":   "0.75rem",
+        "sm":   "0.8125rem",
+        "base": "0.875rem",
+        "lg":   "1rem",
+        "xl":   "1.125rem",
+        "2xl":  "1.375rem",
+        "3xl":  "1.75rem",
+        "4xl":  "2.25rem",
+        "5xl":  "3rem"
+      },
+      "weight": { "regular": 400, "medium": 500, "semibold": 600, "bold": 700 },
+      "lineHeight": { "tight": 1.2, "snug": 1.35, "normal": 1.5, "relaxed": 1.65 },
+      "letterSpacing": { "tight": "-0.01em", "normal": "0", "wide": "0.02em", "caps": "0.06em" }
+    },
+    "space": {
+      "0": "0", "1": "0.25rem", "2": "0.5rem", "3": "0.75rem", "4": "1rem",
+      "5": "1.25rem", "6": "1.5rem", "8": "2rem", "10": "2.5rem", "12": "3rem",
+      "16": "4rem", "20": "5rem", "24": "6rem"
+    },
+    "radius": {
+      "none": "0", "sm": "4px", "md": "6px", "lg": "8px", "xl": "12px", "full": "9999px"
+    },
+    "shadow": {
+      "xs": "0 1px 2px rgba(9,30,66,0.06)",
+      "sm": "0 1px 3px rgba(9,30,66,0.08), 0 1px 2px rgba(9,30,66,0.06)",
+      "md": "0 4px 8px -2px rgba(9,30,66,0.10), 0 2px 4px -2px rgba(9,30,66,0.06)",
+      "lg": "0 12px 24px -6px rgba(9,30,66,0.12), 0 4px 8px -4px rgba(9,30,66,0.06)"
+    },
+    "breakpoint": {
+      "sm": "640px", "md": "768px", "lg": "1024px", "xl": "1280px", "2xl": "1536px"
+    },
+    "motion": {
+      "duration": { "fast": "120ms", "base": "180ms", "slow": "260ms" },
+      "easing": {
+        "standard": "cubic-bezier(0.2, 0, 0, 1)",
+        "entrance": "cubic-bezier(0, 0, 0, 1)",
+        "exit": "cubic-bezier(0.4, 0, 1, 1)"
+      }
+    }
+  },
+  "semantic": {
+    "light": {
+      "bg-canvas": "{gray.50}",
+      "bg-surface": "{gray.0}",
+      "bg-subtle": "{gray.100}",
+      "bg-inset": "{gray.25}",
+      "bg-accent-subtle": "{blue.50}",
+      "border-default": "{gray.200}",
+      "border-strong": "{gray.300}",
+      "border-accent": "{blue.500}",
+      "text-primary": "{gray.900}",
+      "text-secondary": "{gray.600}",
+      "text-tertiary": "{gray.500}",
+      "text-inverse": "{gray.0}",
+      "text-accent": "{blue.600}",
+      "accent": "{blue.500}",
+      "accent-hover": "{blue.600}",
+      "accent-active": "{blue.700}",
+      "status-pass": "{green.600}",
+      "status-fail": "{red.600}",
+      "status-running": "{amber.600}",
+      "status-live": "{blue.500}",
+      "focus-ring": "rgba(47,107,255,0.40)"
+    },
+    "dark": {
+      "bg-canvas": "{gray.950}",
+      "bg-surface": "{gray.900}",
+      "bg-subtle": "{gray.800}",
+      "bg-inset": "#0a0c11",
+      "bg-accent-subtle": "rgba(47,107,255,0.12)",
+      "border-default": "#262c36",
+      "border-strong": "#333b47",
+      "border-accent": "{blue.400}",
+      "text-primary": "{gray.50}",
+      "text-secondary": "{gray.400}",
+      "text-tertiary": "{gray.500}",
+      "text-inverse": "{gray.950}",
+      "text-accent": "{blue.400}",
+      "accent": "{blue.400}",
+      "accent-hover": "{blue.300}",
+      "accent-active": "{blue.500}",
+      "status-pass": "{green.400}",
+      "status-fail": "{red.400}",
+      "status-running": "{amber.400}",
+      "status-live": "{blue.400}",
+      "focus-ring": "rgba(91,140,255,0.45)"
+    }
+  }
+}

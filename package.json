@@ -2,7 +2,7 @@
   "name": "agent-arena",
   "version": "0.1.0",
   "private": true,
-  "description": "Agent Arena — multiple AI agents attempt the same task in parallel, scored live.",
+  "description": "Agent Arena - multiple AI agents attempt the same task in parallel, scored live.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

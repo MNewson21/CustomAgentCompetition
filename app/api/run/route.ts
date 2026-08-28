@@ -1,4 +1,4 @@
-// POST /api/run — stage a BYOK round.
+// POST /api/run - stage a BYOK round.
 //
 // Takes the user's provider key and their uploaded agent configs, validates
 // both, parks them in the ephemeral single-use registry, and returns an opaque
@@ -63,20 +63,20 @@ export async function POST(req: Request) {
     // "wrong shape" message would send someone hunting for a typo, so name it.
     if (typeof apiKey === "string" && apiKey.trim().startsWith("sk-ant-oat01")) {
       return badRequest(
-        "that is an OAuth token from `ant auth login`, not an API key — it needs an " +
+        "that is an OAuth token from `ant auth login`, not an API key - it needs an " +
           "Authorization: Bearer header plus a beta header, which this client does not send. " +
           `Create an API key instead at ${PROVIDERS.anthropic.keyUrl}`,
       );
     }
     return badRequest(
-      `this roster runs on ${spec.label} — ${spec.label} API key required (${spec.keyHint}) — get one at ${spec.keyUrl}`,
+      `this roster runs on ${spec.label} - ${spec.label} API key required (${spec.keyHint}) - get one at ${spec.keyUrl}`,
     );
   }
 
   const roundId = createRound({ taskId: task.id, configs, apiKey: apiKey.trim() });
 
   // Echo back the parsed roster (never the key) so the UI can confirm what the
-  // server actually accepted — clamped limits included.
+  // server actually accepted - clamped limits included.
   return Response.json({
     roundId,
     provider: { id: provider, label: spec.label },

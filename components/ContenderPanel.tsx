@@ -13,7 +13,7 @@ const PILL: Record<PanelState["state"], { cls: string; label: string }> = {
 
 const PY_KEYWORDS = /\b(def|return|while|if|not|None|or|and|is|new_head)\b/g;
 
-// Minimal, safe Python highlight for the streamed code artifact — keywords get the
+// Minimal, safe Python highlight for the streamed code artifact - keywords get the
 // accent-adjacent `kw` color, trailing `# comments` get the muted comment color.
 function highlight(line: string): React.ReactNode {
   const hashAt = line.indexOf("#");

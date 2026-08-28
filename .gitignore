@@ -22,3 +22,8 @@ Thumbs.db
 
 tsconfig.tsbuildinfo
 scripts/verify-isolation.sh
+
+CLAUDE.local.md
+DESIGN.md
+design-preview.html
+stream-preview.html

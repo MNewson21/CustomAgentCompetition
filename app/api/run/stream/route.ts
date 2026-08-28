@@ -1,8 +1,8 @@
 import { CONTENDERS, TASK, type ContenderDef, type ScriptStep } from "@/lib/contenders";
 import type { ContenderMeta, StreamEvent } from "@/lib/events";
-import { reverseContenders, type AgentBrain } from "@/lib/agent/brain";
+import { stubContenders, type AgentBrain } from "@/lib/agent/brain";
 import { AnthropicBrain } from "@/lib/agent/anthropicBrain";
-import { getTask, REVERSE_LINKED_LIST, type CodingTask } from "@/lib/agent/tasks";
+import { getTask, type CodingTask } from "@/lib/agent/tasks";
 import { runContender } from "@/lib/agent/runLoop";
 import type { AgentConfig } from "@/lib/agent/config";
 import { takeRound } from "@/lib/rounds";
@@ -12,9 +12,10 @@ import { takeRound } from "@/lib/rounds";
 // `new EventSource('/api/run/stream')` and routes each event to its panel by
 // `contenderId`.
 //
-// Three modes, ONE event contract — the client code is identical for all three:
+// Three modes, ONE event contract - the client code is identical for all three:
 //   (default)     replay the simulated round data in lib/contenders.ts
 //   ?real=1       real sandboxed orchestrator driven by the deterministic StubBrain
+//                 (`&task=<id>` picks the bench task; defaults to the first)
 //   ?roundId=…    real orchestrator driven by uploaded agent configs against the
 //                 user's own API key, staged by POST /api/run (see lib/rounds.ts)
 
@@ -24,6 +25,9 @@ export const dynamic = "force-dynamic";
 // Distributive omit so each union member keeps its own fields (a plain
 // `Omit<StreamEvent, "seq">` collapses to only the keys common to every member).
 type EventInput = StreamEvent extends infer T ? (T extends StreamEvent ? Omit<T, "seq"> : never) : never;
+
+/** Idle gap after which the stream sends an SSE comment to hold the connection open. */
+const HEARTBEAT_MS = 15_000;
 
 const TOKENS_PER_CHAR = 1 / 3.2; // rough estimate purely for the live token meter
 const USD_PER_TOKEN = 0.000012;
@@ -68,7 +72,7 @@ export async function GET(req: Request) {
     const round = takeRound(roundId);
     if (!round) {
       return Response.json(
-        { error: "round not found, already started, or expired — stage a new one" },
+        { error: "round not found, already started, or expired - stage a new one" },
         { status: 404 },
       );
     }
@@ -78,7 +82,7 @@ export async function GET(req: Request) {
     plan = {
       task,
       roster: round.configs.map((config, i) => ({
-        // Ids are positional and server-assigned — the config author never
+        // Ids are positional and server-assigned - the config author never
         // supplies one, so they can't collide or spoof another panel.
         meta: { id: `c${i}`, name: config.name, model: `${config.model} · ${config.effort}` },
         brain: new AnthropicBrain(config, task, round.apiKey),
@@ -86,10 +90,14 @@ export async function GET(req: Request) {
       })),
     };
   } else if (params.get("real") === "1") {
+    const task = getTask(params.get("task"));
+    if (!task) {
+      return Response.json({ error: `unknown task: ${params.get("task")}` }, { status: 404 });
+    }
     plan = {
-      task: REVERSE_LINKED_LIST,
+      task,
       // Fresh, single-use brains per round: StubBrain consumes its script.
-      roster: reverseContenders().map(({ meta, brain }) => ({ meta, brain })),
+      roster: stubContenders(task.id).map(({ meta, brain }) => ({ meta, brain })),
     };
   }
 
@@ -97,11 +105,27 @@ export async function GET(req: Request) {
     start(controller) {
       let closed = false;
       const timers: ReturnType<typeof setTimeout>[] = [];
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
 
       const cleanup = () => {
         closed = true;
+        if (heartbeat) clearInterval(heartbeat);
         for (const t of timers) clearTimeout(t);
       };
+
+      // A real round can spend a minute inside one model turn with nothing to
+      // say. Proxies and browsers drop an idle connection, and the client reads
+      // that as a stream that died rather than one that is still thinking, so
+      // send an SSE comment periodically - EventSource ignores comment frames,
+      // which is exactly why they work as a heartbeat.
+      heartbeat = setInterval(() => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(": keepalive\n\n"));
+        } catch {
+          cleanup();
+        }
+      }, HEARTBEAT_MS);
 
       const send = (ev: EventInput) => {
         if (closed) return;
@@ -171,7 +195,7 @@ export async function GET(req: Request) {
             at(300, () => {
               send({ type: "done" });
               if (!closed) {
-                closed = true;
+                cleanup();
                 try {
                   controller.close();
                 } catch {
@@ -207,7 +231,7 @@ export async function GET(req: Request) {
           );
           send({ type: "done" });
           if (!closed) {
-            closed = true;
+            cleanup();
             try {
               controller.close();
             } catch {

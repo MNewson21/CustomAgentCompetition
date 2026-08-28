@@ -3,7 +3,7 @@ import type { Config } from "tailwindcss";
 // The design system lives as CSS custom properties in app/globals.css (source of
 // truth: design-tokens.json). Tailwind here only maps a thin set of semantic
 // utilities onto those vars so components can reference `bg-surface`, `text-secondary`,
-// etc. Never hard-code primitives in components — go through these semantic names.
+// etc. Never hard-code primitives in components - go through these semantic names.
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {

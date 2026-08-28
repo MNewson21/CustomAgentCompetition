@@ -36,6 +36,8 @@ export interface PanelState {
 export interface StartOptions {
   real?: boolean;
   roundId?: string;
+  /** bench task id; only meaningful for `real` rounds (BYOK carries it in the round) */
+  taskId?: string;
 }
 
 export interface ArenaStream {
@@ -43,6 +45,8 @@ export interface ArenaStream {
   panels: PanelState[];
   running: boolean;
   hasRun: boolean;
+  /** set when the stream ended without a `done` event - see the onerror handler */
+  streamError: string | null;
   start: (opts?: StartOptions) => void;
 }
 
@@ -98,7 +102,12 @@ export function useArenaStream(): ArenaStream {
   const [panels, setPanels] = useState<PanelState[]>([]);
   const [running, setRunning] = useState(false);
   const [hasRun, setHasRun] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
+  // The server closes the stream right after `done`, and the browser reports that
+  // normal close through onerror - identical to a connection that actually broke.
+  // This flag is the only way to tell the two apart.
+  const finishedRef = useRef(false);
 
   const start = useCallback((opts: StartOptions = {}) => {
     esRef.current?.close();
@@ -106,13 +115,19 @@ export function useArenaStream(): ArenaStream {
     setTask(null);
     setRunning(true);
     setHasRun(true);
+    setStreamError(null);
+    finishedRef.current = false;
 
     // cache-bust so Replay always reconnects to a fresh round. `roundId` claims a
-    // round staged by POST /api/run — it is a single-use handle, not a secret to
+    // round staged by POST /api/run - it is a single-use handle, not a secret to
     // reuse, which is why the key itself never travels on this request.
     const params = new URLSearchParams({ t: String(Date.now()) });
-    if (opts.roundId) params.set("roundId", opts.roundId);
-    else if (opts.real) params.set("real", "1");
+    if (opts.roundId) {
+      params.set("roundId", opts.roundId);
+    } else if (opts.real) {
+      params.set("real", "1");
+      if (opts.taskId) params.set("task", opts.taskId);
+    }
     const es = new EventSource(`/api/run/stream?${params}`);
     esRef.current = es;
 
@@ -137,6 +152,7 @@ export function useArenaStream(): ArenaStream {
         return;
       }
       if (ev.type === "done") {
+        finishedRef.current = true;
         setRunning(false);
         es.close();
         return;
@@ -144,15 +160,41 @@ export function useArenaStream(): ArenaStream {
       setPanels((prev) => prev.map((p) => (p.id === ev.contenderId ? reduce(p, ev) : p)));
     };
 
-    // Server closes the stream after `done`, which surfaces here as an error;
-    // just tear down cleanly.
+    // Fires both when the server closes cleanly after `done` and when the
+    // connection genuinely breaks (a 404 from a spent roundId, a crashed round,
+    // a dropped socket). Only the second case is a problem, and it used to leave
+    // every panel frozen on RUNNING with no explanation - so say what happened
+    // and give the unfinished contenders a terminal state.
     es.onerror = () => {
       es.close();
       setRunning(false);
+      if (finishedRef.current) return;
+
+      setPanels((prev) => {
+        if (prev.length === 0) return prev;
+        return prev.map((p) =>
+          p.state === "queued" || p.state === "running"
+            ? {
+                ...p,
+                state: "error" as ContenderState,
+                finishedAt: p.finishedAt ?? Date.now(),
+                log: appendLine(p.log, "err", "✗ stream ended before this contender finished"),
+              }
+            : p,
+        );
+      });
+
+      // No panels at all means the request never produced an `init` - almost
+      // always a staged round that was already claimed or has expired.
+      setStreamError((current) =>
+        current ??
+        "The round stream ended unexpectedly. If this was a BYOK round, the staged round id is " +
+          "single-use and expires after 5 minutes - stage a new one and run again.",
+      );
     };
   }, []);
 
   useEffect(() => () => esRef.current?.close(), []);
 
-  return { task, panels, running, hasRun, start };
+  return { task, panels, running, hasRun, streamError, start };
 }

@@ -2,23 +2,28 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ContenderPanel } from "@/components/ContenderPanel";
+import { Leaderboard } from "@/components/Leaderboard";
 import { EXAMPLE_ROSTER, RoundSetup } from "@/components/RoundSetup";
-import { useArenaStream, type PanelState } from "@/components/useArenaStream";
+import { useArenaStream } from "@/components/useArenaStream";
+import { winnerOf } from "@/lib/scoring";
 
-// Winner = the passing contender that spent the least, tie-broken by wall-clock
-// time. Only decided once the round is over and at least one contender passed.
-function pickWinner(panels: PanelState[], running: boolean): string | null {
-  if (running) return null;
-  const passers = panels.filter((p) => p.state === "pass");
-  if (passers.length === 0) return null;
-  const best = passers.reduce((a, b) => {
-    if (b.costUsd !== a.costUsd) return b.costUsd < a.costUsd ? b : a;
-    const at = (a.finishedAt ?? 0) - (a.startedAt ?? 0);
-    const bt = (b.finishedAt ?? 0) - (b.startedAt ?? 0);
-    return bt < at ? b : a;
-  });
-  return best.id;
+/**
+ * The bench as the picker sees it.
+ *
+ * Declared here rather than imported from lib/agent/tasks.ts on purpose: that
+ * module holds every task's grader, and importing it from a client component
+ * would bundle the hidden tests into the page. The list arrives over
+ * GET /api/tasks, which projects these four fields and nothing else.
+ */
+interface TaskSummary {
+  id: string;
+  title: string;
+  type: string;
+  prompt: string;
 }
+
+/** The canned simulation only has data for this one task. */
+const SIM_TASK_ID = "reverse-linked-list";
 
 // How the round is sourced. `sim` replays canned data, `stub` runs the real
 // sandboxed orchestrator with a deterministic key-free brain, `byok` runs
@@ -33,13 +38,13 @@ const MODE_LABELS: Record<Mode, string> = {
 };
 
 const MODE_TITLES: Record<Mode, string> = {
-  sim: "Replaying simulated round data — no containers, no API calls",
-  stub: "Real Docker sandbox, deterministic stub agents — no API key needed",
+  sim: "Replaying simulated round data - no containers, no API calls",
+  stub: "Real Docker sandbox, deterministic stub agents - no API key needed",
   byok: "Real Docker sandbox, your agent configs, billed to your Anthropic key",
 };
 
 export function Arena() {
-  const { task, panels, running, hasRun, start } = useArenaStream();
+  const { task, panels, running, hasRun, streamError, start } = useArenaStream();
   const [now, setNow] = useState(() => Date.now());
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [mode, setMode] = useState<Mode>("sim");
@@ -48,9 +53,34 @@ export function Arena() {
   // holds the key and exactly one code path ever transmits it.
   const [apiKey, setApiKey] = useState("");
   const [roster, setRoster] = useState(EXAMPLE_ROSTER);
+  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [taskId, setTaskId] = useState(SIM_TASK_ID);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [accepted, setAccepted] = useState<string | null>(null);
   const [staging, setStaging] = useState(false);
+
+  // The bench is server-owned (graders must not reach the browser), so the picker
+  // is populated over the API rather than from a bundled constant.
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/tasks")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((body: { tasks?: TaskSummary[] }) => {
+        if (!cancelled && body.tasks?.length) setTasks(body.tasks);
+      })
+      // A failed fetch just leaves the picker with the single fallback option;
+      // it must not stop someone running a round.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Simulated mode replays canned data for one task, so pin the picker to it
+  // rather than letting the label claim a task the stream will not deliver.
+  useEffect(() => {
+    if (mode === "sim") setTaskId(SIM_TASK_ID);
+  }, [mode]);
 
   // wall-clock tick drives the per-panel live timers while a round is running
   useEffect(() => {
@@ -68,19 +98,19 @@ export function Arena() {
   const runRound = useCallback(async () => {
     if (mode !== "byok") {
       setSetupError(null);
-      start({ real: mode === "stub" });
+      start({ real: mode === "stub", taskId });
       return;
     }
 
     // Parse locally first so an obvious typo doesn't cost a round trip that
-    // carries the key. The server re-validates regardless — this is UX, not a
+    // carries the key. The server re-validates regardless - this is UX, not a
     // security boundary.
     let contenders: unknown;
     try {
       contenders = JSON.parse(roster);
     } catch (err) {
       setAccepted(null);
-      setSetupError(`agent configs are not valid JSON — ${(err as Error).message}`);
+      setSetupError(`agent configs are not valid JSON - ${(err as Error).message}`);
       return;
     }
 
@@ -89,7 +119,7 @@ export function Arena() {
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey, contenders }),
+        body: JSON.stringify({ apiKey, contenders, task: taskId }),
       });
       const body = (await res.json()) as {
         roundId?: string;
@@ -117,10 +147,16 @@ export function Arena() {
     } finally {
       setStaging(false);
     }
-  }, [apiKey, mode, roster, start]);
+  }, [apiKey, mode, roster, start, taskId]);
 
-  const winnerId = useMemo(() => pickWinner(panels, running), [panels, running]);
+  const winnerId = useMemo(() => winnerOf(panels, running), [panels, running]);
   const busy = running || staging;
+  const selectedTask = tasks.find((t) => t.id === taskId) ?? null;
+  // Prefer what the stream actually announced; fall back to the picker so the bar
+  // is populated before the first round.
+  const shownTitle = task?.title ?? selectedTask?.title ?? "Reverse Linked List";
+  const shownType = task?.type ?? selectedTask?.type ?? "coding";
+  const shownPrompt = task?.prompt ?? selectedTask?.prompt ?? null;
 
   return (
     <div className="wrap">
@@ -128,7 +164,7 @@ export function Arena() {
         <div>
           <h1>Agent Arena</h1>
           <div className="sub">
-            Live streaming — each contender writes its solution line by line, then it executes
+            Live streaming - each contender writes its solution line by line, then it executes
           </div>
         </div>
         <div className="controls">
@@ -169,9 +205,29 @@ export function Arena() {
         />
       )}
 
+      {streamError && <div className="notice err">✗ {streamError}</div>}
+
       <div className="taskbar">
-        <span className="title">{task ? task.title : "Reverse Linked List"}</span>
-        <span className="badge">{task ? task.type : "coding"}</span>
+        <label className="tasksel">
+          <span className="sronly">Task</span>
+          <select
+            value={taskId}
+            disabled={busy || mode === "sim"}
+            title={
+              mode === "sim"
+                ? "Simulated mode replays canned data for one task - switch to Sandbox or BYOK to pick"
+                : "Which task every contender attempts"
+            }
+            onChange={(e) => setTaskId(e.target.value)}
+          >
+            {(tasks.length > 0 ? tasks : [{ id: SIM_TASK_ID, title: shownTitle }]).map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.title}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span className="badge">{shownType}</span>
         <span className="meta-mono">{panels.length || 3} contenders · parallel</span>
         {running ? (
           <span className="live">
@@ -186,10 +242,10 @@ export function Arena() {
         )}
       </div>
 
-      {task && (
+      {shownPrompt && (
         <div className="taskbar" style={{ marginTop: -6 }}>
           <span className="meta-mono" style={{ marginLeft: 0 }}>
-            $ task: {task.prompt}
+            $ task: {shownPrompt}
           </span>
         </div>
       )}
@@ -199,6 +255,8 @@ export function Arena() {
           <ContenderPanel key={p.id} panel={p} now={now} isWinner={p.id === winnerId} />
         ))}
       </div>
+
+      <Leaderboard panels={panels} now={now} running={running} />
     </div>
   );
 }

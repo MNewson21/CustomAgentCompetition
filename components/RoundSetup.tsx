@@ -4,18 +4,18 @@ import { useMemo, useRef } from "react";
 
 import { isModelId, MODELS, PROVIDERS, type ProviderId } from "@/lib/agent/models";
 
-// The BYOK panel — build-order step 3's user-facing half.
+// The BYOK panel - build-order step 3's user-facing half.
 //
 // Two inputs, both of which the server treats as untrusted: a provider API key
 // (the user's own; the round bills to it) and a roster of agent configs. This
-// component is deliberately presentational — it never talks to the API itself.
+// component is deliberately presentational - it never talks to the API itself.
 // Arena owns the staging POST so there is exactly one place that handles the key.
 //
 // The key field retargets itself: the roster names the models, the models name
 // the provider, and the provider decides what a valid key looks like. Guessing
 // wrong here is the difference between "sk-ant-api…" and "sk-or-v1-…", so the
 // label, placeholder and help link are all derived rather than hardcoded. This
-// mirrors rosterProvider() on the server, which is the authority — it re-derives
+// mirrors rosterProvider() on the server, which is the authority - it re-derives
 // the same thing and rejects the round if the roster spans two providers.
 
 /** Best-effort read of the roster's provider. Returns null while it is unparseable. */
@@ -37,7 +37,7 @@ function detectProvider(roster: string): ProviderId | null {
   for (const entry of list) {
     if (!entry || typeof entry !== "object") continue;
     const model = (entry as { model?: unknown }).model ?? "claude-opus-5";
-    if (!isModelId(model)) return null; // unknown id — let the server phrase the error
+    if (!isModelId(model)) return null; // unknown id - let the server phrase the error
     providers.add(MODELS[model].provider);
   }
   // A mixed roster is a server-side rejection; showing one provider's key hint
@@ -104,7 +104,7 @@ export function RoundSetup({
           {spec && (
             <>
               {" "}
-              This roster runs on <strong>{spec.label}</strong> —{" "}
+              This roster runs on <strong>{spec.label}</strong> -{" "}
               <a href={spec.keyUrl} target="_blank" rel="noreferrer">
                 get a key
               </a>
@@ -129,7 +129,7 @@ export function RoundSetup({
           <code>name</code>, <code>model</code>, <code>systemPrompt</code>, <code>effort</code>,{" "}
           <code>thinking</code>, <code>maxSteps</code>, <code>maxTokensPerTurn</code>,{" "}
           <code>tools</code>, <code>limits</code>. Requested limits are clamped to the host&apos;s
-          ceilings — the sandbox is not something a config can widen.
+          ceilings - the sandbox is not something a config can widen.
         </p>
       </div>
 
@@ -197,7 +197,7 @@ export const EXAMPLE_ROSTER = JSON.stringify(
  * A zero-cost roster, for running a real round without an Anthropic key.
  *
  * These are OpenRouter `:free` ids reached through its Anthropic-compatible
- * endpoint, so they travel the identical code path as the paid contenders — same
+ * endpoint, so they travel the identical code path as the paid contenders - same
  * brain, same sandbox, same StreamEvent contract. Only the baseURL, the auth
  * header and two capability flags differ.
  *
