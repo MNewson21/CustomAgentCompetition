@@ -67,7 +67,7 @@ export function Leaderboard({
             <th scope="col">Contender</th>
             <th scope="col">Verdict</th>
             <th scope="col" className="num">Time</th>
-            <th scope="col" className="num">Δ</th>
+            <th scope="col" className="num">Delta</th>
             <th scope="col" className="num">Tokens</th>
             <th scope="col" className="num">Cost</th>
           </tr>
@@ -75,7 +75,7 @@ export function Leaderboard({
         <tbody>
           {ranked.map(({ entry, rank, durationMs }) => {
             const verdict = VERDICT[entry.state];
-            // Δ is only meaningful between two contenders that both finished and
+            // Delta is only meaningful between two contenders that both finished and
             // both passed - a gap to a contender that failed is not a gap in
             // anything the round was measuring.
             const comparable =

@@ -23,6 +23,7 @@ import {
   MODEL_IDS,
   MODELS,
   PROVIDERS,
+  specOf,
   type ModelId,
   type ProviderId,
 } from "@/lib/agent/models";
@@ -170,11 +171,15 @@ export function parseAgentConfig(raw: unknown, where = "agent"): AgentConfig {
     effort: effort as Effort,
     thinking: o.thinking === undefined ? true : (o.thinking as boolean),
     maxSteps: clampNumber(`${where}.maxSteps`, o.maxSteps, CONFIG_DEFAULTS.maxSteps, LIMIT_CEILINGS.maxSteps),
+    // Two ceilings apply: the host's, and any tighter one the chosen model's
+    // provider imposes. Clamping rather than rejecting keeps a roster portable -
+    // the same config can name a Claude model or a free one and simply gets the
+    // largest turn that provider will actually accept.
     maxTokensPerTurn: clampNumber(
       `${where}.maxTokensPerTurn`,
       o.maxTokensPerTurn,
-      CONFIG_DEFAULTS.maxTokensPerTurn,
-      LIMIT_CEILINGS.maxTokensPerTurn,
+      Math.min(CONFIG_DEFAULTS.maxTokensPerTurn, specOf(model).maxTokensCeiling ?? Infinity),
+      Math.min(LIMIT_CEILINGS.maxTokensPerTurn, specOf(model).maxTokensCeiling ?? Infinity),
     ),
     tools,
     limits,
@@ -209,31 +214,21 @@ export function parseRoster(raw: unknown): AgentConfig[] {
 }
 
 /**
- * Which provider a whole roster needs a key for.
+ * Which providers a roster needs credentials for, in first-appearance order.
  *
- * A round carries exactly ONE credential, so every contender in it has to be
- * served by the same provider. Mixing (say) an Anthropic model and an OpenRouter
- * free model in one roster would need two keys; rather than silently authenticate
- * half the field, that is rejected with a message naming the offenders.
+ * A round may mix them. That is the point of the arena: the interesting
+ * comparison is Claude against an open-weights model, not Claude against
+ * Claude, and those live behind different credentials. The caller supplies one
+ * key per provider named here, and each contender authenticates with the key
+ * belonging to its own model's provider.
  */
-export function rosterProvider(configs: AgentConfig[]): ProviderId {
-  const seen = new Map<ProviderId, string[]>();
+export function rosterProviders(configs: AgentConfig[]): ProviderId[] {
+  const seen: ProviderId[] = [];
   for (const c of configs) {
     const p = MODELS[c.model].provider;
-    const names = seen.get(p);
-    if (names) names.push(c.name);
-    else seen.set(p, [c.name]);
+    if (!seen.includes(p)) seen.push(p);
   }
-  if (seen.size > 1) {
-    const groups = [...seen.entries()]
-      .map(([p, names]) => `${PROVIDERS[p].label} (${names.join(", ")})`)
-      .join(" vs ");
-    throw new ConfigError(
-      `a round uses one API key, so every contender must share a provider - got ${groups}`,
-    );
-  }
-  // parseRoster rejects an empty list, so there is always exactly one entry here.
-  return [...seen.keys()][0];
+  return seen;
 }
 
 /**

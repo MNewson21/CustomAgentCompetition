@@ -146,12 +146,12 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
           const dest = safeSolutionPath(scratch, action.path);
           if (!dest) {
             lastError = `rejected unsafe path "${action.path}" - use a bare *.py filename in the workspace`;
-            emit({ type: "tool_result", contenderId, text: `✗ ${lastError}` });
+            emit({ type: "tool_result", contenderId, text: `${lastError}` });
             break;
           }
           await writeFile(dest, action.content, "utf8");
           dirtySinceTest = true;
-          emit({ type: "tool_use", contenderId, name: "write_file", display: `→ write_file  ${action.path}` });
+          emit({ type: "tool_use", contenderId, name: "write_file", display: `write_file  ${action.path}` });
           for (const line of action.content.replace(/\n$/, "").split("\n")) {
             emit({ type: "code", contenderId, file: action.path, line });
           }
@@ -164,7 +164,7 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
             type: "tool_use",
             contenderId,
             name: "run_tests",
-            display: `→ run_tests  ${task.testCmd.join(" ")}`,
+            display: `run_tests  ${task.testCmd.join(" ")}`,
           });
 
           const res = await runInSandbox({
@@ -181,9 +181,9 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
           dirtySinceTest = false;
 
           if (res.timedOut) {
-            emit({ type: "tool_result", contenderId, text: `✗ killed: exceeded time limit` });
+            emit({ type: "tool_result", contenderId, text: `killed: exceeded time limit` });
           } else if (res.oomKilled) {
-            emit({ type: "tool_result", contenderId, text: `✗ killed: exceeded memory limit` });
+            emit({ type: "tool_result", contenderId, text: `killed: exceeded memory limit` });
           } else {
             const { passed, ran, detail } = summarizeTests(res.stdout, res.stderr);
             emit({
@@ -215,17 +215,17 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
 
     let summary: string;
     if (pass) {
-      summary = "✓ PASS · tests green";
+      summary = "PASS · tests green";
     } else if (lastTestPassed === undefined) {
       summary = exhausted
-        ? `✗ FAIL · never ran the tests (hit the ${steps}-step limit)`
-        : "✗ FAIL · never ran the tests";
+        ? `FAIL · never ran the tests (hit the ${steps}-step limit)`
+        : "FAIL · never ran the tests";
     } else if (dirtySinceTest) {
       // Green run, then another edit. Grading the earlier run would credit code
       // that no longer exists in the workspace.
-      summary = "✗ FAIL · solution was edited after the last test run - final version never graded";
+      summary = "FAIL · solution was edited after the last test run - final version never graded";
     } else {
-      summary = exhausted ? `✗ FAIL · tests failed (hit the ${steps}-step limit)` : "✗ FAIL · tests failed";
+      summary = exhausted ? `FAIL · tests failed (hit the ${steps}-step limit)` : "FAIL · tests failed";
     }
 
     emit({ type: "result", contenderId, pass, summary });
@@ -235,7 +235,7 @@ export async function runContender(opts: RunContenderOptions): Promise<RunConten
     // anything else fall back to the raw string.
     const detail = err instanceof Error ? err.message : String(err);
     emit({ type: "status", contenderId, state: "error" });
-    emit({ type: "result", contenderId, pass: false, summary: `✗ ERROR · ${detail}` });
+    emit({ type: "result", contenderId, pass: false, summary: `ERROR · ${detail}` });
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

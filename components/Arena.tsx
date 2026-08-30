@@ -5,6 +5,7 @@ import { ContenderPanel } from "@/components/ContenderPanel";
 import { Leaderboard } from "@/components/Leaderboard";
 import { EXAMPLE_ROSTER, RoundSetup } from "@/components/RoundSetup";
 import { useArenaStream } from "@/components/useArenaStream";
+import type { ProviderId } from "@/lib/agent/models";
 import { winnerOf } from "@/lib/scoring";
 
 /**
@@ -32,15 +33,15 @@ const SIM_TASK_ID = "reverse-linked-list";
 type Mode = "sim" | "stub" | "byok";
 
 const MODE_LABELS: Record<Mode, string> = {
-  sim: "○ Simulated",
-  stub: "◐ Sandbox",
-  byok: "● BYOK",
+  sim: "Simulated",
+  stub: "Sandbox",
+  byok: "BYOK",
 };
 
 const MODE_TITLES: Record<Mode, string> = {
   sim: "Replaying simulated round data - no containers, no API calls",
   stub: "Real Docker sandbox, deterministic stub agents - no API key needed",
-  byok: "Real Docker sandbox, your agent configs, billed to your Anthropic key",
+  byok: "Real Docker sandbox, your agent configs, billed to your own provider keys",
 };
 
 export function Arena() {
@@ -50,8 +51,9 @@ export function Arena() {
   const [mode, setMode] = useState<Mode>("sim");
 
   // BYOK inputs live here, not in RoundSetup, so exactly one component ever
-  // holds the key and exactly one code path ever transmits it.
-  const [apiKey, setApiKey] = useState("");
+  // holds key material and exactly one code path ever transmits it. Keyed by
+  // provider because a cross-family roster needs one credential per provider.
+  const [keys, setKeys] = useState<Partial<Record<ProviderId, string>>>({});
   const [roster, setRoster] = useState(EXAMPLE_ROSTER);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [taskId, setTaskId] = useState(SIM_TASK_ID);
@@ -119,7 +121,9 @@ export function Arena() {
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey, contenders, task: taskId }),
+        // `keys` rather than `apiKey`: the roster decides which providers are
+        // involved, and a mixed roster needs one credential for each of them.
+        body: JSON.stringify({ keys, contenders, task: taskId }),
       });
       const body = (await res.json()) as {
         roundId?: string;
@@ -137,7 +141,7 @@ export function Arena() {
       setAccepted(
         `staged ${body.contenders?.length ?? 0} contender(s): ` +
           (body.contenders ?? [])
-            .map((c) => `${c.name} (${c.model}, effort ${c.effort}, ≤${c.maxSteps} steps)`)
+            .map((c) => `${c.name} (${c.model}, effort ${c.effort}, max ${c.maxSteps} steps)`)
             .join("  ·  "),
       );
       start({ roundId: body.roundId });
@@ -147,7 +151,7 @@ export function Arena() {
     } finally {
       setStaging(false);
     }
-  }, [apiKey, mode, roster, start, taskId]);
+  }, [keys, mode, roster, start, taskId]);
 
   const winnerId = useMemo(() => winnerOf(panels, running), [panels, running]);
   const busy = running || staging;
@@ -169,7 +173,7 @@ export function Arena() {
         </div>
         <div className="controls">
           <button className="toggle" onClick={toggleTheme}>
-            {theme === "dark" ? "◐ Light" : "◐ Dark"}
+            {theme === "dark" ? "Light" : "Dark"}
           </button>
           <div className="modes" role="group" aria-label="Round source">
             {(Object.keys(MODE_LABELS) as Mode[]).map((m) => (
@@ -185,18 +189,18 @@ export function Arena() {
             ))}
           </div>
           <button className="btn btn-secondary" onClick={() => void runRound()} disabled={busy}>
-            ↻ Replay
+            Replay
           </button>
           <button className="btn btn-primary" onClick={() => void runRound()} disabled={busy}>
-            {staging ? "Staging…" : "▶ Run round"}
+            {staging ? "Staging..." : "Run round"}
           </button>
         </div>
       </div>
 
       {mode === "byok" && (
         <RoundSetup
-          apiKey={apiKey}
-          onApiKeyChange={setApiKey}
+          keys={keys}
+          onKeyChange={(provider, value) => setKeys((k) => ({ ...k, [provider]: value }))}
           roster={roster}
           onRosterChange={setRoster}
           error={setupError}
@@ -205,7 +209,7 @@ export function Arena() {
         />
       )}
 
-      {streamError && <div className="notice err">✗ {streamError}</div>}
+      {streamError && <div className="notice err">{streamError}</div>}
 
       <div className="taskbar">
         <label className="tasksel">

@@ -18,6 +18,7 @@
 import { randomBytes } from "node:crypto";
 
 import type { AgentConfig } from "@/lib/agent/config";
+import type { ProviderId } from "@/lib/agent/models";
 
 const TTL_MS = 5 * 60_000;
 
@@ -26,8 +27,12 @@ export interface PendingRound {
   createdAt: number;
   taskId: string;
   configs: AgentConfig[];
-  /** the user's own Anthropic key - this is the only place it is ever held */
-  apiKey: string;
+  /**
+   * One of the user's own keys per provider the roster names. This is the only
+   * place any of them is ever held. A mixed roster carries several because each
+   * contender authenticates against its own model's provider.
+   */
+  keys: Partial<Record<ProviderId, string>>;
 }
 
 // Pinned to globalThis so Next.js dev-mode module reloading doesn't silently

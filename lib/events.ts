@@ -42,7 +42,7 @@ export type StreamEvent =
   | (Base & { type: "reasoning"; text: string })
   // plain assistant text (a plan, a note)
   | (Base & { type: "text"; text: string })
-  // a tool invocation, e.g. { name: "run_tests", display: "→ run_tests  pytest -q" }
+  // a tool invocation, e.g. { name: "run_tests", display: "run_tests  pytest -q" }
   | (Base & { type: "tool_use"; name: string; display: string })
   // output from a tool run
   | (Base & { type: "tool_result"; text: string })

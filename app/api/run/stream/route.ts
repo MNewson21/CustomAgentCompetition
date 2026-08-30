@@ -2,6 +2,7 @@ import { CONTENDERS, TASK, type ContenderDef, type ScriptStep } from "@/lib/cont
 import type { ContenderMeta, StreamEvent } from "@/lib/events";
 import { stubContenders, type AgentBrain } from "@/lib/agent/brain";
 import { AnthropicBrain } from "@/lib/agent/anthropicBrain";
+import { providerOf } from "@/lib/agent/models";
 import { getTask, type CodingTask } from "@/lib/agent/tasks";
 import { runContender } from "@/lib/agent/runLoop";
 import type { AgentConfig } from "@/lib/agent/config";
@@ -85,7 +86,7 @@ export async function GET(req: Request) {
         // Ids are positional and server-assigned - the config author never
         // supplies one, so they can't collide or spoof another panel.
         meta: { id: `c${i}`, name: config.name, model: `${config.model} · ${config.effort}` },
-        brain: new AnthropicBrain(config, task, round.apiKey),
+        brain: new AnthropicBrain(config, task, round.keys[providerOf(config.model).id] ?? ""),
         config,
       })),
     };

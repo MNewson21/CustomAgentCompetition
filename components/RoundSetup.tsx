@@ -6,48 +6,51 @@ import { isModelId, MODELS, PROVIDERS, type ProviderId } from "@/lib/agent/model
 
 // The BYOK panel - build-order step 3's user-facing half.
 //
-// Two inputs, both of which the server treats as untrusted: a provider API key
-// (the user's own; the round bills to it) and a roster of agent configs. This
-// component is deliberately presentational - it never talks to the API itself.
-// Arena owns the staging POST so there is exactly one place that handles the key.
+// Two kinds of input, both of which the server treats as untrusted: the user's
+// own provider API keys (the round bills to them) and a roster of agent configs.
+// This component is deliberately presentational - it never talks to the API
+// itself. Arena owns the staging POST so there is exactly one place that
+// handles key material.
 //
-// The key field retargets itself: the roster names the models, the models name
-// the provider, and the provider decides what a valid key looks like. Guessing
-// wrong here is the difference between "sk-ant-api…" and "sk-or-v1-…", so the
-// label, placeholder and help link are all derived rather than hardcoded. This
-// mirrors rosterProvider() on the server, which is the authority - it re-derives
-// the same thing and rejects the round if the roster spans two providers.
+// The key fields retarget themselves: the roster names the models, the models
+// name the providers, and each provider decides what a valid key looks like.
+// Guessing wrong is the difference between "sk-ant-api…", "sk-or-v1-…" and
+// "gsk_…", so labels, placeholders and help links are all derived rather than
+// hardcoded. A roster may span providers - a Claude contender against a Groq
+// one is the comparison worth watching - in which case one field appears per
+// provider. rosterProviders() on the server is the authority and re-derives the
+// same set.
 
-/** Best-effort read of the roster's provider. Returns null while it is unparseable. */
-function detectProvider(roster: string): ProviderId | null {
+/** Best-effort read of which providers a roster needs keys for. */
+function detectProviders(roster: string): ProviderId[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(roster);
   } catch {
-    return null; // mid-edit; say nothing rather than flicker an error
+    return []; // mid-edit; say nothing rather than flicker an error
   }
   const list = Array.isArray(parsed)
     ? parsed
     : parsed && typeof parsed === "object" && Array.isArray((parsed as { contenders?: unknown }).contenders)
       ? (parsed as { contenders: unknown[] }).contenders
       : null;
-  if (!list || list.length === 0) return null;
+  if (!list || list.length === 0) return [];
 
-  const providers = new Set<ProviderId>();
+  const providers: ProviderId[] = [];
   for (const entry of list) {
     if (!entry || typeof entry !== "object") continue;
     const model = (entry as { model?: unknown }).model ?? "claude-opus-5";
-    if (!isModelId(model)) return null; // unknown id - let the server phrase the error
-    providers.add(MODELS[model].provider);
+    if (!isModelId(model)) return []; // unknown id - let the server phrase the error
+    const p = MODELS[model].provider;
+    if (!providers.includes(p)) providers.push(p);
   }
-  // A mixed roster is a server-side rejection; showing one provider's key hint
-  // would be actively misleading, so fall back to the neutral prompt.
-  return providers.size === 1 ? [...providers][0] : null;
+  return providers;
 }
 
 export interface RoundSetupProps {
-  apiKey: string;
-  onApiKeyChange: (v: string) => void;
+  /** one key per provider the roster names; missing entries render empty */
+  keys: Partial<Record<ProviderId, string>>;
+  onKeyChange: (provider: ProviderId, value: string) => void;
   roster: string;
   onRosterChange: (v: string) => void;
   /** validation message from POST /api/run, shown verbatim */
@@ -58,8 +61,8 @@ export interface RoundSetupProps {
 }
 
 export function RoundSetup({
-  apiKey,
-  onApiKeyChange,
+  keys,
+  onKeyChange,
   roster,
   onRosterChange,
   error,
@@ -67,8 +70,7 @@ export function RoundSetup({
   disabled,
 }: RoundSetupProps) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const provider = useMemo(() => detectProvider(roster), [roster]);
-  const spec = provider ? PROVIDERS[provider] : null;
+  const providers = useMemo(() => detectProviders(roster), [roster]);
 
   const loadFile = async (file: File | undefined) => {
     if (!file) return;
@@ -85,34 +87,61 @@ export function RoundSetup({
         </span>
       </div>
 
-      <div className="field">
-        <label htmlFor="apikey">{spec ? `${spec.label} API key` : "Provider API key"}</label>
-        <input
-          id="apikey"
-          className="input"
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          placeholder={spec ? `${spec.keyHint.replace("starts with ", "")}...` : "sk-ant-api... or sk-or-v1-..."}
-          value={apiKey}
-          disabled={disabled}
-          onChange={(e) => onApiKeyChange(e.target.value)}
-        />
-        <p className="hint">
-          Sent once over POST to start the round, held in memory for a single run, then discarded.
-          It is never written to disk, never logged, and never appears in a URL.
-          {spec && (
-            <>
-              {" "}
-              This roster runs on <strong>{spec.label}</strong> -{" "}
+      {providers.length === 0 && (
+        <div className="field">
+          <label htmlFor="apikey">Provider API key</label>
+          <input
+            id="apikey"
+            className="input"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="sk-ant-api... / sk-or-v1-... / gsk_..."
+            value=""
+            disabled
+            onChange={() => undefined}
+          />
+          <p className="hint">
+            Add at least one agent below and the matching key field will appear.
+          </p>
+        </div>
+      )}
+
+      {providers.map((provider) => {
+        const spec = PROVIDERS[provider];
+        return (
+          <div className="field" key={provider}>
+            <label htmlFor={`apikey-${provider}`}>{spec.label} API key</label>
+            <input
+              id={`apikey-${provider}`}
+              className="input"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={`${spec.keyHint.replace("starts with ", "")}...`}
+              value={keys[provider] ?? ""}
+              disabled={disabled}
+              onChange={(e) => onKeyChange(provider, e.target.value)}
+            />
+            <p className="hint">
+              Sent once over POST to start the round, held in memory for a single run, then
+              discarded. Never written to disk, never logged, never in a URL.{" "}
               <a href={spec.keyUrl} target="_blank" rel="noreferrer">
-                get a key
+                get a {spec.label} key
               </a>
               .
-            </>
-          )}
+            </p>
+          </div>
+        );
+      })}
+
+      {providers.length > 1 && (
+        <p className="hint">
+          This roster spans {providers.map((p) => PROVIDERS[p].label).join(" and ")}. Each contender
+          authenticates with its own provider&apos;s key - that is what makes a cross-family race
+          possible.
         </p>
-      </div>
+      )}
 
       <div className="field">
         <label htmlFor="roster">Agent configs</label>
@@ -135,13 +164,19 @@ export function RoundSetup({
 
       <div className="setup-actions">
         <button className="filebtn" onClick={() => fileRef.current?.click()} disabled={disabled}>
-          ↑ Load .json
+          Load .json
         </button>
         <button className="filebtn" onClick={() => onRosterChange(EXAMPLE_ROSTER)} disabled={disabled}>
-          ⌁ Claude roster
+          Claude roster
         </button>
         <button className="filebtn" onClick={() => onRosterChange(FREE_ROSTER)} disabled={disabled}>
-          ◇ Free roster
+          Free roster
+        </button>
+        <button className="filebtn" onClick={() => onRosterChange(GROQ_ROSTER)} disabled={disabled}>
+          Groq roster
+        </button>
+        <button className="filebtn" onClick={() => onRosterChange(CROSS_ROSTER)} disabled={disabled}>
+          Cross-family
         </button>
         <input
           ref={fileRef}
@@ -155,8 +190,8 @@ export function RoundSetup({
         />
       </div>
 
-      {error && <div className="notice err">✗ {error}</div>}
-      {!error && accepted && <div className="notice ok">✓ {accepted}</div>}
+      {error && <div className="notice err">{error}</div>}
+      {!error && accepted && <div className="notice ok">{accepted}</div>}
     </div>
   );
 }
@@ -225,6 +260,72 @@ export const FREE_ROSTER = JSON.stringify(
     {
       name: "north-coder",
       model: "cohere/north-mini-code:free",
+      maxSteps: 8,
+      systemPrompt: "You are a code specialist. Write the file, run the tests, stop.",
+    },
+  ],
+  null,
+  2,
+);
+
+/**
+ * Groq's free developer tier: the Qwen and gpt-oss families, which OpenRouter's
+ * free tier does not carry. These reach an OpenAI chat-completions endpoint, so
+ * unlike every other roster here they are translated on the way out and back
+ * (lib/agent/wire.ts) rather than passed through.
+ */
+export const GROQ_ROSTER = JSON.stringify(
+  [
+    {
+      name: "qwen38-planner",
+      model: "qwen/qwen3.8-27b",
+      maxSteps: 8,
+      systemPrompt:
+        "Think the algorithm through before you write anything. Prefer the solution with the best time and space complexity, and say what that complexity is in your final summary.",
+    },
+    {
+      name: "gptoss-120b",
+      model: "openai/gpt-oss-120b",
+      maxSteps: 8,
+      systemPrompt: "You are a code specialist. Write the file, run the tests, stop.",
+    },
+    {
+      name: "gptoss-fast",
+      model: "openai/gpt-oss-20b",
+      maxSteps: 8,
+      systemPrompt:
+        "Optimise for speed. Write the most obvious correct solution immediately and run the tests. Do not explore alternatives.",
+    },
+  ],
+  null,
+  2,
+);
+
+/**
+ * The roster this whole arena exists to run: three different model families,
+ * two different providers, two different wire formats, one task, side by side.
+ *
+ * It needs an OpenRouter key AND a Groq key - both free tiers. Add a Claude
+ * contender and it needs an Anthropic key too; the panel grows a third field.
+ */
+export const CROSS_ROSTER = JSON.stringify(
+  [
+    {
+      name: "glm-planner",
+      model: "z-ai/glm-5.2:free",
+      maxSteps: 8,
+      systemPrompt:
+        "Think the algorithm through before you write anything. State the time and space complexity in your final summary.",
+    },
+    {
+      name: "gptoss-120b",
+      model: "openai/gpt-oss-120b",
+      maxSteps: 8,
+      systemPrompt: "Write the most obvious correct solution immediately and run the tests.",
+    },
+    {
+      name: "qwen-coder",
+      model: "qwen/qwen3.8-27b",
       maxSteps: 8,
       systemPrompt: "You are a code specialist. Write the file, run the tests, stop.",
     },

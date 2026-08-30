@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "verify:isolation": "bash scripts/verify-isolation.sh"
+    "verify:isolation": "bash scripts/verify-isolation.sh",
+    "verify:wire": "bash scripts/verify-wire.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",

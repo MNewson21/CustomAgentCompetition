@@ -178,7 +178,7 @@ export function useArenaStream(): ArenaStream {
                 ...p,
                 state: "error" as ContenderState,
                 finishedAt: p.finishedAt ?? Date.now(),
-                log: appendLine(p.log, "err", "✗ stream ended before this contender finished"),
+                log: appendLine(p.log, "err", "stream ended before this contender finished"),
               }
             : p,
         );

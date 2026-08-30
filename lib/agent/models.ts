@@ -13,6 +13,16 @@
 // round with no translation shim - only a different baseURL, a different auth
 // header, and capability flags that switch off the Anthropic-specific fields.
 
+/**
+ * Which request/response format a provider speaks.
+ *
+ * "anthropic" means the Messages API - content blocks, tool_use, tool_result.
+ * "openai" means chat completions, where tool arguments arrive as a JSON string
+ * and reasoning comes back in a sibling field. The brain only ever sees the
+ * Anthropic shape; lib/agent/wire.ts translates for the openai providers.
+ */
+export type WireFormat = "anthropic" | "openai";
+
 /** How a provider expects the caller's credential to be presented. */
 export type AuthStyle =
   /** `x-api-key: <key>` - the Anthropic SDK's default `apiKey` option. */
@@ -25,6 +35,7 @@ export interface ProviderSpec {
   /** undefined = the SDK default (api.anthropic.com). */
   baseURL?: string;
   authStyle: AuthStyle;
+  wire: WireFormat;
   /** Shape of this provider's key, checked before we spend a round finding out. */
   keyPattern: RegExp;
   /** Shown in the UI and in validation errors. */
@@ -38,6 +49,7 @@ export const PROVIDERS = {
     label: "Anthropic",
     baseURL: undefined,
     authStyle: "x-api-key",
+    wire: "anthropic",
     // Deliberately `sk-ant-api`, not `sk-ant-`: an OAuth token from `ant auth
     // login` is `sk-ant-oat01-…`, which the SDK would send as x-api-key and the
     // API would reject with a 401. Failing here gives a readable reason instead.
@@ -53,9 +65,23 @@ export const PROVIDERS = {
     // OpenRouter authenticates with a bearer token; sending the key as x-api-key
     // is a 401 even when the key is perfectly valid.
     authStyle: "bearer",
+    // The skin speaks Messages natively, so no translation is needed.
+    wire: "anthropic",
     keyPattern: /^sk-or-v1-[A-Za-z0-9_-]{20,}$/,
     keyHint: "starts with sk-or-v1-",
     keyUrl: "https://openrouter.ai/keys",
+  },
+  groq: {
+    label: "Groq",
+    // OpenAI-compatible chat completions. Unlike the OpenRouter entry this path
+    // is translated (see lib/agent/wire.ts) - Groq has no Messages-API surface.
+    // The URL stops at /v1 because the transport appends /chat/completions.
+    baseURL: "https://api.groq.com/openai/v1",
+    authStyle: "bearer",
+    wire: "openai",
+    keyPattern: /^gsk_[A-Za-z0-9]{20,}$/,
+    keyHint: "starts with gsk_",
+    keyUrl: "https://console.groq.com/keys",
   },
 } as const satisfies Record<string, ProviderSpec>;
 
@@ -69,6 +95,14 @@ export interface ModelSpec {
   adaptiveThinking: boolean;
   /** accepts `output_config.effort`; errors on models that predate it */
   effort: boolean;
+  /**
+   * Per-model ceiling on max output tokens per turn, when the provider imposes
+   * one tighter than the host's. Groq's free tier budgets a whole request
+   * (prompt + requested completion) against a tokens-per-minute allowance, so a
+   * turn asking for the host default is refused outright with a 413 before the
+   * model ever runs. Omitted means the host ceiling applies.
+   */
+  maxTokensCeiling?: number;
   /** USD per input token / output token, at list price */
   usdPerInputToken: number;
   usdPerOutputToken: number;
@@ -162,6 +196,88 @@ export const MODELS = {
     usdPerInputToken: 0,
     usdPerOutputToken: 0,
   },
+
+  // --- Groq free developer tier --------------------------------------------
+  // The Qwen and gpt-oss families, which OpenRouter's free tier does not carry.
+  // Bringing in a second model family is the reason the OpenAI-format
+  // translation exists at all: a benchmark that only compares Claude to Claude
+  // is not much of a benchmark.
+  //
+  // These ids were taken from the LIVE /openai/v1/models endpoint, not from the
+  // docs. Groq's model page still lists llama-3.3-70b-versatile and
+  // llama-3.1-8b-instant as production models; the API does not serve them, so
+  // registering them would have produced a 404 mid-round. Re-check with:
+  //   curl -s https://api.groq.com/openai/v1/models \
+  //     -H "Authorization: Bearer $GROQ_API_KEY" | jq -r '.data[].id'
+  //
+  // All are documented as tool-use capable. `thinking` and `output_config.effort`
+  // are Anthropic request fields with no OpenAI equivalent, so both flags stay
+  // false and the brain omits them.
+  //
+  // PRICING: deliberately 0. Groq's developer tier is genuinely free (rate
+  // limited, no card), so 0 is what a BYOK user's key is actually billed, and
+  // the cost column exists to report the user's spend. Groq does publish paid
+  // list rates; they are not hard-coded here because inventing a number the
+  // round did not incur would make the leaderboard lie. A Groq-only round is
+  // therefore cost-degenerate and renders as `free` - costIsDegenerate() in
+  // lib/scoring.ts already handles exactly this, which is why ranking is
+  // verdict -> time -> cost rather than cost-first.
+  "qwen/qwen3.8-27b": {
+    label: "qwen 3.8 27b · free",
+    provider: "groq",
+    adaptiveThinking: false,
+    effort: false,
+    // Groq free tier: 8000 TPM covers prompt AND the REQUESTED completion, so
+    // every turn reserves this whole number against the minute's budget whether
+    // or not the model uses it. 2000 leaves room for the prompt and the growing
+    // tool history, and lets several turns land inside one window - a solution
+    // file needs nowhere near this much.
+    maxTokensCeiling: 2000,
+    usdPerInputToken: 0,
+    usdPerOutputToken: 0,
+  },
+  "qwen/qwen3.6-27b": {
+    label: "qwen 3.6 27b · free",
+    provider: "groq",
+    adaptiveThinking: false,
+    effort: false,
+    // Groq free tier: 8000 TPM covers prompt AND the REQUESTED completion, so
+    // every turn reserves this whole number against the minute's budget whether
+    // or not the model uses it. 2000 leaves room for the prompt and the growing
+    // tool history, and lets several turns land inside one window - a solution
+    // file needs nowhere near this much.
+    maxTokensCeiling: 2000,
+    usdPerInputToken: 0,
+    usdPerOutputToken: 0,
+  },
+  "openai/gpt-oss-120b": {
+    label: "gpt-oss 120b · free",
+    provider: "groq",
+    adaptiveThinking: false,
+    effort: false,
+    // Groq free tier: 8000 TPM covers prompt AND the REQUESTED completion, so
+    // every turn reserves this whole number against the minute's budget whether
+    // or not the model uses it. 2000 leaves room for the prompt and the growing
+    // tool history, and lets several turns land inside one window - a solution
+    // file needs nowhere near this much.
+    maxTokensCeiling: 2000,
+    usdPerInputToken: 0,
+    usdPerOutputToken: 0,
+  },
+  "openai/gpt-oss-20b": {
+    label: "gpt-oss 20b · free",
+    provider: "groq",
+    adaptiveThinking: false,
+    effort: false,
+    // Groq free tier: 8000 TPM covers prompt AND the REQUESTED completion, so
+    // every turn reserves this whole number against the minute's budget whether
+    // or not the model uses it. 2000 leaves room for the prompt and the growing
+    // tool history, and lets several turns land inside one window - a solution
+    // file needs nowhere near this much.
+    maxTokensCeiling: 2000,
+    usdPerInputToken: 0,
+    usdPerOutputToken: 0,
+  },
 } as const satisfies Record<string, ModelSpec>;
 
 export type ModelId = keyof typeof MODELS;
@@ -172,6 +288,16 @@ export const DEFAULT_MODEL: ModelId = "claude-opus-5";
 
 export function isModelId(v: unknown): v is ModelId {
   return typeof v === "string" && v in MODELS;
+}
+
+/**
+ * MODELS is `as const` so each entry keeps its literal types, which means an
+ * entry that omits an optional field does not carry that property at all. This
+ * widens back to the declared interface, so optional fields are readable
+ * uniformly across every model.
+ */
+export function specOf(model: ModelId): ModelSpec {
+  return MODELS[model];
 }
 
 export function providerOf(model: ModelId): ProviderSpec & { id: ProviderId } {

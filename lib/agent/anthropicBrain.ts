@@ -1,10 +1,17 @@
-// The real brain: drives one contender with the Anthropic Messages API.
+// The real brain: drives one contender using the Anthropic Messages shape.
 //
-// "Anthropic" here means the wire protocol, not necessarily the vendor. The
-// client is pointed at whatever baseURL the model's provider declares, so an
-// OpenRouter-served open-weights model runs through this same class - the skin
-// speaks Messages, tool_use and tool_result survive the round trip, and the
-// Anthropic-only request fields are switched off by capability flags.
+// "Anthropic" here names the internal representation, not the vendor and no
+// longer even the wire format. Content blocks, tool_use and tool_result are what
+// this class reasons in; getting them onto a given provider is the transport's
+// job (lib/agent/wire.ts). Anthropic and OpenRouter take that shape directly,
+// Groq gets it translated to and from OpenAI chat completions, and the
+// Anthropic-only request fields are switched off per model by capability flags.
+//
+// One brain, every provider, on purpose: the recovery logic below - malformed
+// tool calls answered rather than treated as "finished", a cap on consecutive
+// faults, usage accumulation, key redaction - is needed MORE by an open-weights
+// model than by Claude. A second brain class would have meant a second copy of
+// all of it, drifting.
 //
 // It plugs into the exact same AgentBrain interface as StubBrain, so the run
 // loop, the Docker sandbox, and the StreamEvent contract are untouched. The
@@ -23,6 +30,7 @@ import type { AgentAction, AgentBrain, BrainContext } from "@/lib/agent/brain";
 import type { AgentConfig } from "@/lib/agent/config";
 import { EMPTY_USAGE, MODELS, priceUsage, providerOf, type TokenUsage } from "@/lib/agent/models";
 import type { CodingTask } from "@/lib/agent/tasks";
+import { makeTransport, MALFORMED_ARGS, type ModelTransport } from "@/lib/agent/wire";
 
 /**
  * How many malformed tool calls in a row before the contender is stopped. Each
@@ -93,7 +101,7 @@ export class AnthropicBrainError extends Error {}
 export class AnthropicBrain implements AgentBrain {
   readonly label: string;
 
-  private readonly client: Anthropic;
+  private readonly transport: ModelTransport;
   /** provider display name, used only to make connection errors legible */
   private readonly provider: string;
   private readonly messages: Anthropic.MessageParam[] = [];
@@ -125,15 +133,9 @@ export class AnthropicBrain implements AgentBrain {
     const provider = providerOf(config.model);
     this.provider = provider.label;
     this.label = `${MODELS[config.model].label} · byok`;
-    // authStyle decides which header carries the credential: Anthropic reads
-    // x-api-key (the SDK's `apiKey`), OpenRouter reads Authorization: Bearer
-    // (the SDK's `authToken`). Passing a key through the wrong one is a 401 even
-    // when the key itself is valid, so this is not cosmetic.
-    this.client = new Anthropic({
-      ...(provider.authStyle === "bearer" ? { authToken: apiKey } : { apiKey }),
-      ...(provider.baseURL ? { baseURL: provider.baseURL } : {}),
-      maxRetries: 2,
-    });
+    // Which wire format and which auth header this provider needs is entirely
+    // the transport's business; everything below this line is format-agnostic.
+    this.transport = makeTransport(provider, apiKey);
     this.system = systemPrompt(task, config);
     this.tools = TOOLS.filter((t) => (config.tools as string[]).includes(t.name));
     this.messages.push({ role: "user", content: task.prompt });
@@ -217,15 +219,25 @@ export class AnthropicBrain implements AgentBrain {
     }
 
     try {
-      const message = await this.client.messages.create(params);
+      const message = await this.transport.create(params);
       this.accumulate(message.usage);
       return message;
     } catch (err) {
-      throw new AnthropicBrainError(redact(describe(err, this.provider), this.apiKey));
+      throw new AnthropicBrainError(
+        redact(this.transport.describeError(err, this.provider), this.apiKey),
+      );
     }
   }
 
-  private accumulate(usage: Anthropic.Usage) {
+  /**
+   * `usage` is required by the Messages API, but a compatible skin in front of a
+   * third-party model is not contractually bound to send one - and an omitted
+   * object used to take the whole round down with a TypeError before the first
+   * turn was decoded. Missing usage means the meters under-report, which is a
+   * far better outcome than a contender that dies for a reason no panel explains.
+   */
+  private accumulate(usage: Anthropic.Usage | undefined | null) {
+    if (!usage) return;
     this.tokens = {
       input: this.tokens.input + (usage.input_tokens ?? 0),
       output: this.tokens.output + (usage.output_tokens ?? 0),
@@ -236,11 +248,20 @@ export class AnthropicBrain implements AgentBrain {
 
   /** Turn one API response into the run loop's action vocabulary. */
   private decode(message: Anthropic.Message) {
+    // Same reasoning as accumulate(): a compatible endpoint may hand back a
+    // message with no content array at all. Treat that as an empty turn, which
+    // the no-tool_use branch below already reads as "the agent is finished".
+    if (!Array.isArray(message.content)) {
+      this.done = true;
+      this.queue.push({ type: "text", text: "provider returned a response with no content" });
+      this.queue.push({ type: "submit" });
+      return;
+    }
     if (message.stop_reason === "refusal") {
       this.done = true;
       this.queue.push({
         type: "text",
-        text: `✗ model declined this request${
+        text: `model declined this request${
           message.stop_details?.type === "refusal" && message.stop_details.category
             ? ` (${message.stop_details.category})`
             : ""
@@ -271,14 +292,14 @@ export class AnthropicBrain implements AgentBrain {
             this.faultStreak += 1;
             // Surfaced in the panel so a malformed-tool-call round reads as what
             // it is, rather than as an agent that mysteriously did nothing.
-            this.queue.push({ type: "text", text: `✗ ${outcome.fault}` });
+            this.queue.push({ type: "text", text: `${outcome.fault}` });
             if (this.faultStreak >= MAX_TOOL_FAULTS) {
               this.done = true;
               this.pendingTool = null;
               this.toolFault = null;
               this.queue.push({
                 type: "text",
-                text: `✗ gave up after ${MAX_TOOL_FAULTS} malformed tool calls in a row`,
+                text: `gave up after ${MAX_TOOL_FAULTS} malformed tool calls in a row`,
               });
               this.queue.push({ type: "submit" });
               return;
@@ -297,7 +318,7 @@ export class AnthropicBrain implements AgentBrain {
     if (!this.pendingTool) {
       this.done = true;
       if (message.stop_reason === "max_tokens") {
-        this.queue.push({ type: "text", text: "✗ hit the per-turn token limit" });
+        this.queue.push({ type: "text", text: "hit the per-turn token limit" });
       }
       this.queue.push({ type: "submit" });
     }
@@ -316,6 +337,17 @@ export class AnthropicBrain implements AgentBrain {
 
     if (block.name === "write_file") {
       const input = (block.input ?? {}) as { path?: unknown; content?: unknown };
+      // OpenAI-format providers send tool arguments as a string, so "not even
+      // JSON" is a failure mode that cannot happen on the Messages API. Naming it
+      // beats reporting it as two missing fields.
+      if (MALFORMED_ARGS in input) {
+        return {
+          fault:
+            `write_file arguments were not valid JSON. Received: ` +
+            `${preview((input as Record<string, unknown>)[MALFORMED_ARGS])}. ` +
+            `Call it again with a JSON object containing string \`path\` and \`content\`.`,
+        };
+      }
       const missing: string[] = [];
       if (typeof input.path !== "string" || input.path.trim() === "") missing.push("`path` (a string)");
       if (typeof input.content !== "string") missing.push("`content` (a string)");
@@ -347,14 +379,3 @@ function preview(value: unknown): string {
   return text.length > 200 ? `${text.slice(0, 200)}…` : text;
 }
 
-/** Typed SDK errors carry the useful part; fall back to the raw string otherwise. */
-function describe(err: unknown, provider: string): string {
-  if (err instanceof Anthropic.AuthenticationError) return `invalid ${provider} API key (401)`;
-  if (err instanceof Anthropic.PermissionDeniedError) return "API key lacks access to this model (403)";
-  if (err instanceof Anthropic.NotFoundError) return "model not found (404)";
-  if (err instanceof Anthropic.RateLimitError) return "rate limited (429) - retries exhausted";
-  // APIConnectionError extends APIError in this SDK, so it must be checked first.
-  if (err instanceof Anthropic.APIConnectionError) return `could not reach the ${provider} API`;
-  if (err instanceof Anthropic.APIError) return `API error ${err.status ?? "?"}: ${err.message}`;
-  return String(err);
-}
